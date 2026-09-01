@@ -24,8 +24,10 @@ class Agent:
 
         if classification == "fact":
             if self.learner.should_learn(input_text):
-                self.memory.remember(input_text)
-                return f"I learned: {input_text}"
+                learned = self.learn(input_text)
+                if learned:
+                    return f"{self.name} learned: {input_text}"
+                return f"{self.name} already knows: {input_text}"
 
         if classification == "question":
             memories = self.memory.search(input_text)
@@ -55,11 +57,7 @@ class Agent:
         return f"{self.name} is thinking about: {input_text}"
 
     def learn(self, information):
-        self.memory.remember(information)
-        return f"{self.name} learned: {information}"
-
-    def recall(self):
-        return self.memory.recall()
+        return self.memory.remember(information)
 
     def search_memory(self, query):
         return self.memory.search(query)

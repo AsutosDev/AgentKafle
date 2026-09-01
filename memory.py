@@ -19,9 +19,15 @@ class Memory:
             json.dump(self.data, file, indent=4)
 
     def remember(self, information):
-        if information not in self.data:
-            self.data.append(information)
-            self.save()
+        normalized_information = self.normalize(information)
+
+        for memory in self.data:
+            if self.normalize(memory) == normalized_information:
+                return False  # Avoid storing duplicate information
+
+        self.data.append(information)
+        self.save()
+        return True  # Successfully remembered new information
 
     def recall(self):
         return self.data
@@ -31,15 +37,24 @@ class Memory:
 
     def search(self, query):
         stop_words = {
-            "what", "is", "the", "a", "an",
-            "my", "your", "i", "you",
-            "of", "to", "in", "for", "and"
+            "what",
+            "is",
+            "the",
+            "a",
+            "an",
+            "my",
+            "your",
+            "i",
+            "you",
+            "of",
+            "to",
+            "in",
+            "for",
+            "and",
         }
 
         query_words = {
-            word
-            for word in self.normalize(query).split()
-            if word not in stop_words
+            word for word in self.normalize(query).split() if word not in stop_words
         }
 
         results = []
