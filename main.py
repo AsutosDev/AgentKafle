@@ -1,13 +1,21 @@
-from environment import Environment
+from agent import Agent
 
-env = Environment()
 
-state = env.reset()
+def main():
+    agent = Agent()
 
-print("Starting position:", state)
+    print(f"{agent.name} is online.")
 
-state, reward, done = env.step(1)
+    while True:
+        user_input = input("You: ")
 
-print("New position:", state)
-print("Reward:", reward)
-print("Done:", done)
+        if user_input.lower() == "exit":
+            print("AgentKafle shutting down.")
+            break
+
+        response = agent.think(user_input)
+        print(response)
+
+
+if __name__ == "__main__":
+    main()
