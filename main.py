@@ -13,8 +13,15 @@ def main():
             print("AgentKafle shutting down.")
             break
 
-        response = agent.think(user_input)
-        print(response)
+        if user_input.lower().startswith("learn "):
+            information = user_input[6:]
+            response = agent.learn(information)
+        elif user_input.lower() == "memory":
+            response = agent.recall()
+        else:
+            response = agent.think(user_input)
+
+        print(f"AgentKafle: {response}")
 
 
 if __name__ == "__main__":
