@@ -1,5 +1,6 @@
 import re
 
+from router import Router
 from environment import Environment
 from memory import Memory
 from learner import Learner
@@ -9,10 +10,12 @@ from tools import Tools
 class Agent:
     def __init__(self, name="AgentKafle"):
         self.name = name
+
         self.memory = Memory()
         self.environment = Environment()
         self.learner = Learner()
         self.tools = Tools()
+        self.router = Router()
 
     def observe(self):
         return self.environment.observe()
@@ -31,15 +34,21 @@ class Agent:
             if memories:
                 return f"I remember: {memories[0]}"
 
-            if any(char.isdigit() for char in input_text):
-                expression = re.sub(r"[^0-9+\-*/().]", "", input_text)
+        tool = self.router.decide(input_text)
 
+        if tool == "calculator":
+            expression = re.sub(r"[^0-9+\-*/(). ]", "", input_text)
+
+            try:
                 result = self.tools.calculate(expression)
 
                 if result != "Invalid expression.":
                     return f"I calculated: {result}"
 
-            return "I don't know the answer to that yet."
+                return "Invalid expression."
+
+            except Exception as e:
+                return f"Error calculating the expression: {str(e)}"
 
         return f"{self.name} is thinking about: {input_text}"
 
