@@ -19,8 +19,43 @@ class Memory:
             json.dump(self.data, file, indent=4)
 
     def remember(self, information):
-        self.data.append(information)
-        self.save()
+        if information not in self.data:
+            self.data.append(information)
+            self.save()
 
     def recall(self):
         return self.data
+
+    def normalize(self, text):
+        return text.lower().strip(".,!?;:")
+
+    def search(self, query):
+        stop_words = {
+            "what", "is", "the", "a", "an",
+            "my", "your", "i", "you",
+            "of", "to", "in", "for", "and"
+        }
+
+        query_words = {
+            word
+            for word in self.normalize(query).split()
+            if word not in stop_words
+        }
+
+        results = []
+
+        for memory in self.data:
+            memory_words = {
+                word
+                for word in self.normalize(memory).split()
+                if word not in stop_words
+            }
+
+            score = len(query_words & memory_words)
+
+            if score > 0:
+                results.append((score, memory))
+
+        results.sort(reverse=True)
+
+        return [memory for score, memory in results]
