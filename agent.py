@@ -1,5 +1,6 @@
 from environment import Environment
 from memory import Memory
+from learner import Learner
 
 
 class Agent:
@@ -7,11 +8,16 @@ class Agent:
         self.name = name
         self.memory = Memory()
         self.environment = Environment()
+        self.learner = Learner()
 
     def observe(self):
         return self.environment.observe()
 
     def think(self, input_text):
+        if self.learner.should_learn(input_text):
+            self.memory.remember(input_text)
+            return f"I learned: {input_text}"
+
         return f"{self.name} is thinking about: {input_text}"
 
     def learn(self, information):
