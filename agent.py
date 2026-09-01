@@ -10,7 +10,6 @@ from tools import Tools
 class Agent:
     def __init__(self, name="AgentKafle"):
         self.name = name
-
         self.memory = Memory()
         self.environment = Environment()
         self.learner = Learner()
@@ -33,6 +32,9 @@ class Agent:
 
             if memories:
                 return f"I remember: {memories[0]}"
+
+            if "my name" in input_text.lower():
+                return f"Your name is {self.name}."
 
         tool = self.router.decide(input_text)
 
