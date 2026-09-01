@@ -1,6 +1,9 @@
+import re
+
 from environment import Environment
 from memory import Memory
 from learner import Learner
+from tools import Tools
 
 
 class Agent:
@@ -9,6 +12,7 @@ class Agent:
         self.memory = Memory()
         self.environment = Environment()
         self.learner = Learner()
+        self.tools = Tools()
 
     def observe(self):
         return self.environment.observe()
@@ -27,11 +31,18 @@ class Agent:
             if memories:
                 return f"I remember: {memories[0]}"
 
-            return f"I don't know the answer to that yet."
+            if any(char.isdigit() for char in input_text):
+                expression = re.sub(r"[^0-9+\-*/().]", "", input_text)
+
+                result = self.tools.calculate(expression)
+
+                if result != "Invalid expression.":
+                    return f"I calculated: {result}"
+
+            return "I don't know the answer to that yet."
 
         return f"{self.name} is thinking about: {input_text}"
 
-        return f"{self.name} is thinking about: {input_text}"
     def learn(self, information):
         self.memory.remember(information)
         return f"{self.name} learned: {information}"
