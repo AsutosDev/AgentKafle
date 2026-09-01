@@ -14,14 +14,22 @@ class Agent:
         return self.environment.observe()
 
     def think(self, input_text):
-        memories = self.memory.search(input_text)
+        classification = self.learner.classify(input_text)
 
-        if memories:
-            return f"I remember: {memories[0]}"
+        if classification == "fact":
+            if self.learner.should_learn(input_text):
+                self.memory.remember(input_text)
+                return f"I learned: {input_text}"
 
-        if self.learner.should_learn(input_text):
-            self.memory.remember(input_text)
-            return f"I learned: {input_text}"
+        if classification == "question":
+            memories = self.memory.search(input_text)
+
+            if memories:
+                return f"I remember: {memories[0]}"
+
+            return f"I don't know the answer to that yet."
+
+        return f"{self.name} is thinking about: {input_text}"
 
         return f"{self.name} is thinking about: {input_text}"
     def learn(self, information):
