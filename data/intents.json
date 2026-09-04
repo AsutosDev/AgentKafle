@@ -1,0 +1,72 @@
+{
+    "conversation": [
+        "hello",
+        "hi",
+        "hey",
+        "good morning",
+        "good evening",
+        "good night",
+        "how are you",
+        "how are you doing",
+        "what's up",
+        "nice to meet you",
+        "hey there",
+        "hello agent",
+        "are you there",
+        "talk to me",
+        "let's chat"
+    ],
+    "memory_store": [
+        "my name is Aashutosh",
+        "remember my name is Aashutosh",
+        "remember that I like football",
+        "I like pizza",
+        "I love programming",
+        "remember that I am learning Python",
+        "my favorite color is blue",
+        "remember my favorite color is blue",
+        "I live in Kathmandu",
+        "remember that I live in Kathmandu",
+        "save this information",
+        "remember this",
+        "remember what I just told you",
+        "keep this in memory",
+        "don't forget this"
+    ],
+    "memory_retrieve": [
+        "what is my name",
+        "do you remember my name",
+        "what do you know about me",
+        "what is my favorite color",
+        "what do I like",
+        "what did I tell you",
+        "what do you remember",
+        "tell me what you remember about me",
+        "do you remember what I said",
+        "what information do you have about me"
+    ],
+    "calculator": [
+        "what is 2 plus 3",
+        "calculate 25 times 4",
+        "what is 100 divided by 5",
+        "solve 15 + 27",
+        "calculate 45 * 12",
+        "what is 500 minus 125",
+        "how much is 12 times 8",
+        "calculate 144 / 12",
+        "solve 25 + 50",
+        "what is 10 squared"
+    ],
+    "unknown": [
+        "tell me a joke",
+        "what is the weather",
+        "search the internet",
+        "open my files",
+        "write me a story",
+        "explain quantum physics",
+        "who is the president",
+        "play some music",
+        "send an email",
+        "what time is it"
+    ]
+}
