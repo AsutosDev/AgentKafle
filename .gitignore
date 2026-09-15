@@ -1,9 +1,10 @@
 __pycache__/
 *.pyc
-.env
-.DS_Store
-memory.json
 .venv/
 .env
 .env.*
 !.env.example
+.DS_Store
+
+# Runtime case data (created by CaseManager)
+cases/
