@@ -185,19 +185,26 @@ confirmed. The status is stored by `EvidenceManager`; the LLM only reads it.
 
 ## GUI (Step 5)
 
-The desktop application (`gui.py`) provides a chat-style interface with:
+The desktop application (`gui.py`) provides a clean, modern chat-style
+interface with:
 
-- **Chat history** — scrollable conversation with clear You / AgentKafle labels.
-- **Active case display** — always shows the current case (or "NO ACTIVE CASE").
+- **Polished header** — AgentKafle wordmark with the "Detective AI" subtitle,
+  plus a compact provider/model badge (OLLAMA · llama3.2:3b) that is
+  reserved for a future provider selector.
+- **Active case card** — a compact case bar that always shows the current
+  case's ID, title, and a colour-coded status badge (OPEN / SOLVED /
+  CLOSED), or "No active case" when none is open.
+- **Message bubbles** — user messages align right in a blue bubble, AgentKafle
+  replies align left; both auto-scroll as the conversation grows.
 - **Command passthrough** — all case and evidence commands (`new case`,
   `list evidence`, `verify evidence`, etc.) are routed through the same
   `AgentKafle.handle_command()` used by the terminal, so behavior is
   identical.
-- **Real loading animation** — a braille spinner (⠋ ⠙ ⠹ …) animates
-  continuously while the LLM generates a response.
+- **Real loading animation** — while the model thinks, the input area shows
+  "⠹ AgentKafle is thinking..." with a live braille spinner (⠋ ⠙ ⠹ …).
 - **Non-freezing UI** — the LLM call runs on a background thread; the GUI
-  remains responsive, input is disabled during generation, and the spinner
-  updates every 80 ms.
+  remains responsive, input and Send are disabled during generation, and the
+  spinner updates every 80 ms.
 
 Launch the GUI:
 
