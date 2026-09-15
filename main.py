@@ -18,7 +18,7 @@ from agent import AgentKafle
 
 
 HELP_TEXT = """\
-Commands:
+Case commands:
   new case <title> [| <description>]   Create a case (becomes active)
   list cases                           List all cases
   open case CASE-001                   Select the active case
@@ -26,6 +26,17 @@ Commands:
   close case [CASE-001]                Mark the active case CLOSED
   solve case [CASE-001]                Mark the active case SOLVED
   delete case CASE-001                 Delete a case
+
+Evidence commands (operate on the active case):
+  add evidence <title> [| <desc>] [| type=<TYPE>] [| source=<who>]
+                                       Add evidence (type: PHYSICAL, DIGITAL,
+                                       TESTIMONY, DOCUMENT, OTHER)
+  list evidence                        List the case's evidence
+  view evidence EVD-001                Show one evidence item
+  verify evidence EVD-001              Mark it VERIFIED
+  dispute evidence EVD-001             Mark it DISPUTED
+  delete evidence EVD-001              Delete it
+
   help                                 Show this help
   exit / quit                          Shut down
 

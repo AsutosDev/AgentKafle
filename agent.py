@@ -1,14 +1,15 @@
 """The main AgentKafle class.
 
 AgentKafle is the top-level object that the rest of the app talks to. It sits
-between the user and three collaborators:
+between the user and four collaborators:
 
-  User → AgentKafle → CaseManager    (structured case data, no LLM)
-                    → Persona + LLM  (language and reasoning)
+  User → AgentKafle → CaseManager      (structured case data, no LLM)
+                    → EvidenceManager  (structured evidence data, no LLM)
+                    → Persona + LLM    (language and reasoning)
 
-Key rule: the LLM never reads or writes case files. CaseManager is the single
-source of truth for structured case data. The LLM only receives case context
-when reasoning is required, as text inside the system prompt.
+Key rule: the LLM never reads or writes case or evidence files. CaseManager
+and EvidenceManager are the single sources of truth for structured data. The
+LLM only receives a text summary when reasoning is required.
 
 The detective persona (system prompt) lives in persona.py, not here.
 """
@@ -18,6 +19,17 @@ import re
 from llm import LLMInterface
 from persona import Persona
 from cases import CaseManager, CaseStatus
+from evidence import EvidenceManager, EvidenceType, EvidenceStatus
+
+
+# Maps user-friendly type names to EvidenceType values.
+EVIDENCE_TYPES = {
+    "physical": EvidenceType.PHYSICAL,
+    "digital": EvidenceType.DIGITAL,
+    "testimony": EvidenceType.TESTIMONY,
+    "document": EvidenceType.DOCUMENT,
+    "other": EvidenceType.OTHER,
+}
 
 
 class AgentKafle:
@@ -26,6 +38,7 @@ class AgentKafle:
         self.llm = LLMInterface()
         self.persona = Persona(agent_name=name)
         self.case_manager = CaseManager()
+        self.evidence_manager = EvidenceManager()
 
     # ── Case operations (application logic, never sent to the LLM) ────────
 
@@ -104,13 +117,122 @@ class AgentKafle:
             f"Updated: {case.updated_at}"
         )
 
+    # ── Evidence operations (active case only, never sent to the LLM) ─────
+
+    def add_evidence(self, title, description="", evidence_type=EvidenceType.OTHER, source=""):
+        """Add evidence to the active case."""
+        case, error = self._require_active_case()
+        if error:
+            return error
+
+        _, message = self.evidence_manager.add(
+            case.id, title, description, evidence_type, source
+        )
+        return message
+
+    def list_evidence(self):
+        """List the active case's evidence."""
+        case, error = self._require_active_case()
+        if error:
+            return error
+
+        items = self.evidence_manager.list_for_case(case.id)
+        if not items:
+            return f"No evidence yet for {case.id}."
+
+        lines = []
+        for item in items:
+            lines.append(
+                f"{item.id} — {item.title} "
+                f"[{item.evidence_type.value} / {item.status.value}]"
+            )
+        return "\n".join(lines)
+
+    def view_evidence(self, evidence_id):
+        """Show one evidence item from the active case."""
+        case, error = self._require_active_case()
+        if error:
+            return error
+
+        item = self.evidence_manager.get(case.id, evidence_id)
+        if not item:
+            return f"Error: Evidence {evidence_id} not found."
+
+        return self._format_evidence(item)
+
+    def verify_evidence(self, evidence_id):
+        """Mark an item VERIFIED on the active case."""
+        return self._change_evidence_status(evidence_id, EvidenceStatus.VERIFIED)
+
+    def dispute_evidence(self, evidence_id):
+        """Mark an item DISPUTED on the active case."""
+        return self._change_evidence_status(evidence_id, EvidenceStatus.DISPUTED)
+
+    def delete_evidence(self, evidence_id):
+        """Delete an item from the active case."""
+        case, error = self._require_active_case()
+        if error:
+            return error
+
+        _, message = self.evidence_manager.delete(case.id, evidence_id)
+        return message
+
+    def _change_evidence_status(self, evidence_id, new_status):
+        case, error = self._require_active_case()
+        if error:
+            return error
+
+        _, message = self.evidence_manager.update_status(case.id, evidence_id, new_status)
+        return message
+
+    def _require_active_case(self):
+        """Return (case, None) or (None, error_message)."""
+        case = self.case_manager.get_active()
+        if not case:
+            return None, "No active case. Create or select a case first."
+        return case, None
+
+    def _format_evidence(self, item):
+        return (
+            f"Evidence: {item.id}\n"
+            f"Title: {item.title}\n"
+            f"Type: {item.evidence_type.value}\n"
+            f"Status: {item.status.value}\n"
+            f"Description: {item.description or '(no description)'}\n"
+            f"Source: {item.source or '(unknown)'}\n"
+            f"Case: {item.case_id}\n"
+            f"Created: {item.created_at}\n"
+            f"Updated: {item.updated_at}"
+        )
+
     # ── Command router ────────────────────────────────────────────────────
-    # Detects case commands in plain language. Returns (handled, response).
-    # If handled is False, the caller should send the text to the LLM.
+    # Detects case and evidence commands in plain language. Returns
+    # (handled, response). If handled is False, the caller sends the text to
+    # the LLM.
 
     def handle_command(self, text):
         lower = text.lower().strip()
 
+        # ── Evidence commands (checked first so "add evidence" etc. match) ─
+        if lower.startswith("add evidence"):
+            return True, self._cmd_add_evidence(text)
+
+        if lower in ("evidence", "list evidence", "show evidence", "all evidence"):
+            return True, self.list_evidence()
+
+        if lower.startswith("view evidence") or lower.startswith("show evidence"):
+            return True, self._cmd_view_evidence(text)
+
+        if lower.startswith("verify evidence"):
+            return True, self._cmd_verify_evidence(text)
+
+        if lower.startswith("dispute evidence"):
+            return True, self._cmd_dispute_evidence(text)
+
+        if lower.startswith("delete evidence") or lower.startswith("remove evidence"):
+            return True, self._cmd_delete_evidence(text)
+
+        # ── Case commands ─────────────────────────────────────────────────
         if lower.startswith(("new case", "create case")):
             return True, self._cmd_create_case(text)
 
@@ -145,6 +267,8 @@ class AgentKafle:
 
         return False, None
 
+    # ── command helpers ───────────────────────────────────────────────────
+
     def _cmd_create_case(self, text):
         # Strip the command phrase, then optional punctuation.
         rest = re.sub(r"(?i)^\s*(new|create)\s+case\b", "", text).strip()
@@ -172,8 +296,83 @@ class AgentKafle:
             return self.solve_case(case_id)
         return self.close_case(case_id)
 
+    def _cmd_add_evidence(self, text):
+        # Syntax:
+        #   add evidence <title> | <description> | type=PHYSICAL | source=Guard
+        # Only the title is required. type= and source= are optional.
+        rest = re.sub(r"(?i)^\s*add\s+evidence\b", "", text).strip()
+        rest = rest.lstrip(":- ").strip()
+
+        if not rest:
+            return (
+                "Please provide a title. Example:\n"
+                "add evidence Broken window | Glass fragments found inside Room 204"
+            )
+
+        title = None
+        description = ""
+        evidence_type = EvidenceType.OTHER
+        source = ""
+
+        for segment in rest.split("|"):
+            segment = segment.strip()
+            if not segment:
+                continue
+
+            key, sep, value = segment.partition("=")
+            key_lower = key.strip().lower()
+
+            if sep and key_lower in ("type", "source"):
+                value = value.strip()
+                if key_lower == "type":
+                    evidence_type = EVIDENCE_TYPES.get(value.lower())
+                    if evidence_type is None:
+                        valid = ", ".join(t.upper() for t in EVIDENCE_TYPES)
+                        return f"Error: Unknown type '{value}'. Valid types: {valid}."
+                else:
+                    source = value
+            elif title is None:
+                title = segment
+            elif not description:
+                description = segment
+            else:
+                description += " " + segment
+
+        if not title:
+            return "Please provide a title. Example: add evidence Broken window | Glass ..."
+
+        return self.add_evidence(title, description, evidence_type, source)
+
+    def _cmd_view_evidence(self, text):
+        evidence_id = self._extract_evidence_id(text)
+        if not evidence_id:
+            return "Please include an evidence ID. Example: view evidence EVD-001"
+        return self.view_evidence(evidence_id)
+
+    def _cmd_verify_evidence(self, text):
+        evidence_id = self._extract_evidence_id(text)
+        if not evidence_id:
+            return "Please include an evidence ID. Example: verify evidence EVD-001"
+        return self.verify_evidence(evidence_id)
+
+    def _cmd_dispute_evidence(self, text):
+        evidence_id = self._extract_evidence_id(text)
+        if not evidence_id:
+            return "Please include an evidence ID. Example: dispute evidence EVD-001"
+        return self.dispute_evidence(evidence_id)
+
+    def _cmd_delete_evidence(self, text):
+        evidence_id = self._extract_evidence_id(text)
+        if not evidence_id:
+            return "Please include an evidence ID. Example: delete evidence EVD-001"
+        return self.delete_evidence(evidence_id)
+
     def _extract_case_id(self, text):
         match = re.search(r"(?i)\bcase-\d+\b", text)
+        return match.group(0).upper() if match else None
+
+    def _extract_evidence_id(self, text):
+        match = re.search(r"(?i)\bevd-\d+\b", text)
         return match.group(0).upper() if match else None
 
     # ── LLM reasoning ─────────────────────────────────────────────────────
@@ -181,21 +380,14 @@ class AgentKafle:
     def respond(self, user_message):
         """Get an LLM-generated response, with active case context attached.
 
-        The case data is passed as text only. The model cannot modify it;
-        all changes go through CaseManager above.
+        Case and evidence data are passed as text only. The model cannot
+        modify them; all changes go through the managers above.
         """
         system_prompt = self.persona.system_prompt
 
         active_case = self.case_manager.get_active()
         if active_case:
-            system_prompt += (
-                "\n\n━━ ACTIVE CASE CONTEXT ━━\n"
-                f"Case ID: {active_case.id}\n"
-                f"Title: {active_case.title}\n"
-                f"Status: {active_case.status}\n"
-                f"Description: {active_case.description or '(no description)'}\n"
-                "Use this context when reasoning. It is the current investigation."
-            )
+            system_prompt += self._build_case_context(active_case)
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -203,3 +395,50 @@ class AgentKafle:
         ]
 
         return self.llm.chat(messages)
+
+    def _build_case_context(self, case):
+        """Build the case + evidence text block for the system prompt."""
+        lines = [
+            "",
+            "",
+            "━━ ACTIVE CASE CONTEXT ━━",
+            f"Case ID: {case.id}",
+            f"Title: {case.title}",
+            f"Status: {case.status}",
+            f"Description: {case.description or '(no description)'}",
+        ]
+
+        items = self.evidence_manager.list_for_case(case.id)
+
+        if items:
+            lines.append("")
+            lines.append(f"EVIDENCE ({len(items)} item(s)):")
+
+            # Group by status so the model can see trust levels immediately.
+            for status in (EvidenceStatus.VERIFIED,
+                           EvidenceStatus.UNVERIFIED,
+                           EvidenceStatus.DISPUTED):
+                group = [i for i in items if i.status == status]
+                if not group:
+                    continue
+                lines.append(f"[{status.value}]")
+                for item in group:
+                    lines.append(f"  {item.id} — {item.title}")
+                    lines.append(f"    Type: {item.evidence_type.value}")
+                    lines.append(f"    Description: {item.description or '(none)'}")
+                    lines.append(f"    Source: {item.source or '(unknown)'}")
+
+            lines.append("")
+            lines.append(
+                "Evidence status matters: VERIFIED evidence may be treated as "
+                "established. UNVERIFIED evidence is only a claim and must NOT "
+                "be treated as fact. DISPUTED evidence is contested and must "
+                "not be relied upon. Never present UNVERIFIED or DISPUTED "
+                "evidence as confirmed."
+            )
+        else:
+            lines.append("")
+            lines.append("EVIDENCE: (none recorded yet)")
+
+        lines.append("Use this context when reasoning.")
+        return "\n".join(lines)

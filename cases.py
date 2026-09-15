@@ -176,7 +176,8 @@ class CaseManager:
     def _load_all(self):
         """Read every case file from the storage directory."""
         for filename in sorted(os.listdir(self.storage_dir)):
-            if not filename.startswith("CASE-") or not filename.endswith(".json"):
+            # Match only CASE-001.json, not CASE-001.evidence.json (Step 4).
+            if not re.match(r"^CASE-\d+\.json$", filename):
                 continue
 
             filepath = os.path.join(self.storage_dir, filename)

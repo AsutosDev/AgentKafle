@@ -7,15 +7,15 @@ This project is built in 7 steps:
 
 1. Foundation — LLM integration, project structure
 2. Detective identity & behavior — persona, reasoning categories
-3. Case management — cases, statuses, active case, JSON persistence (current)
-4. Evidence tracking — items, connections, contradictions
+3. Case management — cases, statuses, active case, JSON persistence
+4. Evidence tracking — items, types, statuses, JSON persistence (current)
 5. Memory — long-term store and retrieval for case knowledge
 6. Reasoning — hypotheses, suspect analysis, final report
 7. Tools & GUI
 
 AgentKafle connects to a pre-trained language model, behaves like an
-analytical AI detective, and can manage real investigation cases that persist
-between sessions. Evidence, reasoning, and the GUI arrive in later steps.
+analytical AI detective, and manages cases and evidence that persist between
+sessions. Reasoning, memory, and the GUI arrive in later steps.
 
 ## Requirements
 
@@ -120,13 +120,71 @@ text to the system prompt when reasoning, so the model always knows which
 investigation it is working on. The model only receives a copy; CaseManager
 remains the source of truth.
 
+## Evidence management
+
+Evidence is managed by `evidence.py` and attached to the **active case**:
+
+- `EvidenceType` — `PHYSICAL`, `DIGITAL`, `TESTIMONY`, `DOCUMENT`, `OTHER`.
+- `EvidenceStatus` — `UNVERIFIED`, `VERIFIED`, `DISPUTED`.
+- `Evidence` — a dataclass with `id`, `case_id`, `title`, `description`,
+  `evidence_type`, `status`, `source`, `created_at`, and `updated_at`.
+- `EvidenceManager` — adds, loads, updates, and deletes evidence.
+
+Evidence IDs (`EVD-001`, `EVD-002`, …) are unique across all cases.
+
+Each case's evidence is stored in its own file:
+
+```
+cases/
+    CASE-001.json
+    CASE-001.evidence.json
+    CASE-002.json
+    CASE-002.evidence.json
+```
+
+Splitting evidence per case keeps cases independent: deleting one case never
+touches another's evidence, and the plain JSON can later be swapped for a
+database.
+
+### Evidence commands
+
+Evidence commands operate on the active case and are handled in application
+code — the LLM never writes evidence data:
+
+```
+add evidence Broken window | Glass fragments found inside Room 204
+add evidence Camera footage | Someone entering Room 204 at 8:17 PM | type=DIGITAL | source=Security camera
+list evidence
+view evidence EVD-001
+verify evidence EVD-001
+dispute evidence EVD-001
+delete evidence EVD-001
+```
+
+`type=` and `source=` are optional. Without them, evidence is created as
+`OTHER` / `UNVERIFIED`.
+
+### How evidence status affects reasoning
+
+When AgentKafle reasons, the active case's evidence is grouped by status and
+sent to the model with an explicit rule:
+
+- **VERIFIED** — may be treated as established.
+- **UNVERIFIED** — only a claim; must not be treated as fact.
+- **DISPUTED** — contested; must not be relied upon.
+
+The model is told never to present UNVERIFIED or DISPUTED evidence as
+confirmed. The status is stored by `EvidenceManager`; the LLM only reads it.
+
 ## Architecture
 
 - `main.py` — command-line entry point
-- `agent.py` — the AgentKafle class: case operations, command routing, and
-  LLM reasoning
+- `agent.py` — the AgentKafle class: case/evidence operations, command
+  routing, and LLM reasoning
 - `llm.py` — LLMInterface: the only module that talks to the model
 - `persona.py` — the detective system prompt and Persona loader
 - `cases.py` — Case, CaseStatus, and CaseManager (JSON persistence)
-- `memory.py`, `evidence.py`, `detective.py`, `tools.py`, `gui.py` —
-  placeholder modules for later steps
+- `evidence.py` — Evidence, EvidenceType, EvidenceStatus, and
+  EvidenceManager (JSON persistence)
+- `memory.py`, `detective.py`, `tools.py`, `gui.py` — placeholder modules for
+  later steps
