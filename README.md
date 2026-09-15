@@ -8,14 +8,15 @@ This project is built in 7 steps:
 1. Foundation — LLM integration, project structure
 2. Detective identity & behavior — persona, reasoning categories
 3. Case management — cases, statuses, active case, JSON persistence
-4. Evidence tracking — items, types, statuses, JSON persistence (current)
-5. Memory — long-term store and retrieval for case knowledge
-6. Reasoning — hypotheses, suspect analysis, final report
-7. Tools & GUI
+4. Evidence tracking — items, types, statuses, JSON persistence
+5. GUI — chat interface, case/evidence awareness, loading animation (current)
+6. Memory — long-term store and retrieval for case knowledge
+7. Reasoning — hypotheses, suspect analysis, final report
 
 AgentKafle connects to a pre-trained language model, behaves like an
-analytical AI detective, and manages cases and evidence that persist between
-sessions. Reasoning, memory, and the GUI arrive in later steps.
+analytical AI detective, manages cases and evidence that persist between
+sessions, and provides a desktop GUI with real-time loading animation.
+Memory and advanced reasoning arrive in later steps.
 
 ## Requirements
 
@@ -41,8 +42,14 @@ API keys; `.env` is gitignored.
 
 ## Usage
 
+Terminal REPL:
 ```bash
 python main.py
+```
+
+Desktop GUI:
+```bash
+python gui.py
 ```
 
 ## Configuration
@@ -175,6 +182,30 @@ sent to the model with an explicit rule:
 
 The model is told never to present UNVERIFIED or DISPUTED evidence as
 confirmed. The status is stored by `EvidenceManager`; the LLM only reads it.
+
+## GUI (Step 5)
+
+The desktop application (`gui.py`) provides a chat-style interface with:
+
+- **Chat history** — scrollable conversation with clear You / AgentKafle labels.
+- **Active case display** — always shows the current case (or "NO ACTIVE CASE").
+- **Command passthrough** — all case and evidence commands (`new case`,
+  `list evidence`, `verify evidence`, etc.) are routed through the same
+  `AgentKafle.handle_command()` used by the terminal, so behavior is
+  identical.
+- **Real loading animation** — a braille spinner (⠋ ⠙ ⠹ …) animates
+  continuously while the LLM generates a response.
+- **Non-freezing UI** — the LLM call runs on a background thread; the GUI
+  remains responsive, input is disabled during generation, and the spinner
+  updates every 80 ms.
+
+Launch the GUI:
+
+```bash
+python gui.py
+```
+
+The terminal REPL (`python main.py`) continues to work unchanged.
 
 ## Architecture
 
