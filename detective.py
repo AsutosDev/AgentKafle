@@ -261,6 +261,14 @@ class Detective:
         self.evidence_manager = evidence_manager
         self.llm = llm if llm is not None else LLMInterface()
 
+    def set_llm(self, llm):
+        """Point this Detective at a different LLM (e.g. after a provider switch).
+
+        reason() always uses whatever LLM is set here, which keeps structured
+        detective reasoning on the same provider the agent has selected.
+        """
+        self.llm = llm
+
     def get_active_case(self):
         """Return the active Case object, or None if there is none."""
         return self.case_manager.get_active()

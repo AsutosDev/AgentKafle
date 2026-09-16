@@ -379,7 +379,9 @@ class AgentKafleGUI(tk.Tk):
     def _select_provider(self, key):
         """Handle picking a provider from the menu.
 
-        Switches the active LLM provider for the AgentKafle instance.
+        Switches the Agent's actual LLM backend first and only then updates
+        the GUI pill, so the displayed provider always matches the backend
+        that will serve the next request (both respond() and reason()).
         """
         if key not in PROVIDERS:
             return
@@ -396,15 +398,10 @@ class AgentKafleGUI(tk.Tk):
             )
             return
 
-        # Create new agent with the selected provider
+        # Switch the Agent's real LLM backend before touching the GUI so a
+        # failed switch can never be reported as successful.
         try:
-            new_agent = AgentKafle(provider=key)
-            # Preserve the existing history and case state
-            new_agent.case_manager = self.agent.case_manager
-            new_agent.evidence_manager = self.agent.evidence_manager
-            new_agent.memory = self.agent.memory
-            new_agent.detective = self.agent.detective
-            self.agent = new_agent
+            self.agent.set_provider(key)
         except Exception as e:
             self._append_error(f"Failed to switch to {info['label']}: {e}")
             return
@@ -587,7 +584,12 @@ class AgentKafleGUI(tk.Tk):
         self._stop_spinner()
         self._set_busy(False)
 
-        if any(word in error.lower() for word in ("connect", "refused", "url")):
+        # The Ollama-specific hint only applies when Ollama is the active
+        # backend; a Gemini request must never be reported as an Ollama
+        # connection failure.
+        if self._active_provider == "ollama" and any(
+            word in error.lower() for word in ("connect", "refused", "url")
+        ):
             friendly = (
                 "Could not reach Ollama. Please ensure it is running:\n"
                 "  ollama serve"

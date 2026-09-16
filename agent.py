@@ -98,6 +98,24 @@ class AgentKafle:
         self.memory = MemoryStore()
         self.detective = Detective(self.case_manager, self.evidence_manager, self.llm)
 
+    def set_provider(self, provider):
+        """Switch the LLM backend used by respond() and Detective.reason().
+
+        Creates the new provider, installs it as this agent's LLM, and points
+        the Detective at the very same instance — so every request (normal
+        chat, memory, case/evidence queries, and structured detective
+        reasoning) is served by the selected backend.
+
+        If the provider cannot be created (e.g. a missing Gemini API key or
+        an unknown provider name), this raises and leaves the Agent's
+        backend unchanged.
+        """
+        provider = provider.lower().strip()
+        llm = create_llm(provider)
+        self.provider_name = provider
+        self.llm = llm
+        self.detective.set_llm(llm)
+
     # ── Case operations (application logic, never sent to the LLM) ────────
 
     def create_case(self, title, description=""):
