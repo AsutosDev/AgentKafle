@@ -37,7 +37,7 @@ class LLMInterface:
         # client requires the argument, so we pass it anyway.
         self.client = OpenAI(base_url=self.base_url, api_key=self.api_key)
 
-    def chat(self, messages):
+    def chat(self, messages, json_mode=False):
         """Send a list of chat messages and return the model's reply text.
 
         messages is a list of dicts, e.g.:
@@ -45,11 +45,17 @@ class LLMInterface:
                 {"role": "system", "content": "You are a detective."},
                 {"role": "user", "content": "What is your name?"},
             ]
+
+        When json_mode is True, the provider is asked to return one valid
+        JSON object only. The caller must still parse the reply; prompt
+        instructions (not just this flag) tell the model which keys to use.
         """
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-        )
+        kwargs = {"model": self.model, "messages": messages}
+
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = self.client.chat.completions.create(**kwargs)
 
         # The reply is nested inside the response. We just want the text.
         return response.choices[0].message.content
