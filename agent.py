@@ -88,7 +88,8 @@ MEMORY_KEYWORDS = (
 
 
 class AgentKafle:
-    def __init__(self, name="AgentKafle", provider="ollama", router=None, model=None):
+    def __init__(self, name="AgentKafle", provider="ollama", router=None, model=None,
+                 memory=None):
         self.name = name
 
         # The router is the single authoritative holder of the active LLM.
@@ -101,7 +102,10 @@ class AgentKafle:
         self.persona = Persona(agent_name=name)
         self.case_manager = CaseManager()
         self.evidence_manager = EvidenceManager()
-        self.memory = MemoryStore()
+        # Optional per-user memory: callers (e.g. the GUI, after login) can
+        # inject a MemoryStore scoped to the logged-in user. When omitted the
+        # default global MemoryStore is used, preserving existing behavior.
+        self.memory = memory if memory is not None else MemoryStore()
         self.detective = Detective(self.case_manager, self.evidence_manager, self.router)
 
     # ── active provider (through the router) ───────────────────────────────

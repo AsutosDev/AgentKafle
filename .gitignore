@@ -11,3 +11,6 @@ cases/
 
 # Runtime memory data (created by MemoryStore)
 memory/
+
+# Runtime database (created lazily by database.py)
+data/
