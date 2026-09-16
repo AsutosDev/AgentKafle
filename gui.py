@@ -31,7 +31,7 @@ from tkinter import messagebox, simpledialog
 from agent import AgentKafle
 from llm import ProviderConfigError, ProviderConnectionError
 from auth import AuthError, Session, UserManager
-from database import DATA_DIR, Database
+from database import Database, get_data_dir
 from history import ChatStore
 from memory import MemoryStore
 
@@ -261,7 +261,7 @@ class AgentKafleGUI(tk.Tk):
         # Per-user long-term memory (separate from chat history). The old
         # global memory/memories.json is left untouched on disk.
         memory_store = MemoryStore(
-            storage_dir=os.path.join(DATA_DIR, "memories"),
+            storage_dir=os.path.join(get_data_dir(), "memories"),
             filename=f"user_{user.id}.json",
         )
         self.agent = AgentKafle(memory=memory_store)

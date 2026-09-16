@@ -4,9 +4,10 @@ This module owns the connection to the local SQLite database and the schema.
 It is the ONLY module that speaks SQL directly — auth.py and history.py are
 thin, plain-Python APIs on top of it.
 
-Storage layout:
-    data/
-        agentkafle.db
+Storage layout (per-user, writable location):
+    macOS:   ~/Library/Application Support/AgentKafle/agentkafle.db
+    Windows: %APPDATA%\\AgentKafle\\agentkafle.db
+    Linux:   ~/.local/share/AgentKafle/agentkafle.db
 
 Why SQLite (and not more JSON files)?
 - The app already persists cases and evidence as JSON. Conversations and
@@ -31,15 +32,55 @@ Schema (created automatically on first open):
 
 import os
 import sqlite3
+import sys
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-# Project root (the directory containing this file), so the data directory is
-# stable regardless of the process's current working directory.
-_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(_PROJECT_ROOT, "data")
-DB_PATH = os.path.join(DATA_DIR, "agentkafle.db")
+
+def _get_data_dir() -> str:
+    """Return the platform-appropriate user data directory for AgentKafle.
+
+    This is a writable location that persists across application updates.
+    """
+    if sys.platform == "darwin":
+        # macOS: ~/Library/Application Support/AgentKafle
+        base = os.path.expanduser("~/Library/Application Support")
+    elif sys.platform == "win32":
+        # Windows: %APPDATA%\AgentKafle
+        base = os.environ.get("APPDATA", os.path.expanduser("~"))
+    else:
+        # Linux/other: ~/.local/share/AgentKafle (XDG)
+        base = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+
+    data_dir = os.path.join(base, "AgentKafle")
+    os.makedirs(data_dir, exist_ok=True)
+    return data_dir
+
+
+# Project root (the directory containing this file), used as fallback for
+# development runs from source. In a packaged app (PyInstaller), sys._MEIPASS
+# points to the bundle resources, but we want user data in the platform dir.
+if getattr(sys, "frozen", False):
+    # Running in a PyInstaller bundle
+    _PROJECT_ROOT = os.path.dirname(sys.executable)
+else:
+    # Running from source
+    _PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# Default fallback (used only in development)
+_DEFAULT_DATA_DIR = os.path.join(_PROJECT_ROOT, "data")
+DB_FILENAME = "agentkafle.db"
+
+
+def get_data_dir() -> str:
+    """Public accessor for the data directory."""
+    return _get_data_dir()
+
+
+def get_db_path() -> str:
+    """Return the full path to the SQLite database file."""
+    return os.path.join(get_data_dir(), DB_FILENAME)
 
 
 def now_iso():
@@ -96,7 +137,7 @@ class Database:
     """A single reusable SQLite connection with a small safe API.
 
     Usage:
-        db = Database()                      # data/agentkafle.db (default)
+        db = Database()                      # platform data dir/agentkafle.db
         user = UserManager(db).create_user("Alice", "secret")
         ChatStore(db).create_conversation(user.id)
 
@@ -108,8 +149,8 @@ class Database:
         close()                     → close the connection
     """
 
-    def __init__(self, path=DB_PATH):
-        self.path = path
+    def __init__(self, path=None):
+        self.path = path or get_db_path()
 
         parent = os.path.dirname(os.path.abspath(self.path))
         if parent:
