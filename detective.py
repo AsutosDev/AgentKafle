@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 
 from cases import CaseManager
 from evidence import EvidenceManager, EvidenceStatus
-from llm import LLMInterface
+from llm import ProviderRouter
 
 
 # ── Investigation context ─────────────────────────────────────────────────
@@ -249,25 +249,27 @@ class Detective:
     ReasoningResult.
     """
 
-    def __init__(self, case_manager, evidence_manager, llm=None):
-        """Store the managers and the LLM. The Detective never touches files.
+    def __init__(self, case_manager, evidence_manager, router=None):
+        """Store the managers and the router. The Detective never touches files.
 
-        llm is an optional LLMInterface instance. If omitted, a default
-        LLMInterface is created so reason() works out of the box. Callers
-        that already own an LLM (like AgentKafle) can pass it in to share a
-        single connection.
+        router is a ProviderRouter. If omitted, a default router is created so
+        reason() works out of the box. The router is the single authoritative
+        holder of the active provider, so the Detective can never drift onto a
+        different backend than the Agent that shares the same router.
         """
         self.case_manager = case_manager
         self.evidence_manager = evidence_manager
-        self.llm = llm if llm is not None else LLMInterface()
+        self.router = router if router is not None else ProviderRouter(default="ollama")
 
-    def set_llm(self, llm):
-        """Point this Detective at a different LLM (e.g. after a provider switch).
+    @property
+    def llm(self):
+        """The active provider managed by the router.
 
-        reason() always uses whatever LLM is set here, which keeps structured
-        detective reasoning on the same provider the agent has selected.
+        Returning ``self.router.provider`` on every access means this is
+        always exactly the provider the Agent sees — there is no stored,
+        possibly-stale LLM reference on the Detective anymore.
         """
-        self.llm = llm
+        return self.router.provider
 
     def get_active_case(self):
         """Return the active Case object, or None if there is none."""
@@ -381,7 +383,10 @@ class Detective:
         messages = self._build_reasoning_messages(investigation)
 
         try:
-            raw_text = self.llm.chat(messages, json_mode=True)
+            # Structured-output contract: the router translates this into the
+            # active provider's JSON mechanism (response_format for Ollama,
+            # response_mime_type for Gemini). The caller only asks for JSON.
+            raw_text = self.router.chat_json(messages)
         except Exception as exc:
             return None, f"Reasoning failed: LLM error ({exc})"
 

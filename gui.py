@@ -18,6 +18,7 @@ import threading
 import tkinter as tk
 
 from agent import AgentKafle
+from llm import ProviderConfigError, ProviderConnectionError
 
 
 # ── Braille spinner frames ────────────────────────────────────────────────
@@ -29,26 +30,15 @@ BUBBLE_MAX_FRACTION = 0.72
 BUBBLE_ABSOLUTE_MAX = 640
 
 
-# ── Provider registry ─────────────────────────────────────────────────────
-# Single place that describes the providers the header can select.
-# "configured" is determined at runtime based on API key availability.
-# A real Gemini backend plugs in here without redesigning any GUI code.
-# ───────────────────────────────────────────────────────────────────────────
+# ── Provider metadata ────────────────────────────────────────────────────
+# Single source of truth: the provider registry inside llm.py describes every
+# provider (label, default model, configured status). The GUI consumes that
+# metadata through the Agent's ProviderRouter instead of maintaining its own
+# provider dict, so adding a provider is a one-file change (llm.py).
 
-def _check_provider_configured(provider: str) -> bool:
-    """Check if a provider has its required configuration."""
-    if provider == "ollama":
-        return True  # Ollama runs locally, no API key needed
-    elif provider == "gemini":
-        import os
-        return bool(os.getenv("GEMINI_API_KEY", "").strip())
-    return False
-
-
-PROVIDERS = {
-    "ollama": {"label": "OLLAMA", "value": "llama3.2:3b", "configured": True},
-    "gemini": {"label": "GEMINI", "value": "gemini-3.6-flash", "configured": _check_provider_configured("gemini")},
-}
+def _provider_info(agent):
+    """Return provider key -> metadata dict from the Agent's router."""
+    return agent.router.configured_providers()
 
 
 class AgentKafleGUI(tk.Tk):
@@ -68,9 +58,9 @@ class AgentKafleGUI(tk.Tk):
         # model sees the full conversation.
         self._history = []
 
-        # Provider selection state. "ollama" is the default and the only
-        # configured backend for now. See PROVIDERS above.
-        self._active_provider = "ollama"
+        # Provider metadata consumed from the Agent's router (the registry is
+        # the single source of truth; no duplicated provider dict here).
+        self._providers = _provider_info(self.agent)
 
         # Input field placeholder ("ghost text") state.
         self._entry_placeholder = "Ask AgentKafle…"
@@ -358,16 +348,19 @@ class AgentKafleGUI(tk.Tk):
 
     # ── Provider / model selector ─────────────────────────────────────────
 
-    def _provider_model(self):
-        """Return (label, model) of the currently selected provider."""
-        info = PROVIDERS[self._active_provider]
-        return info["label"], info["value"]
+    def _provider_pill_text(self):
+        """Return (label, model) of the actually active provider.
+
+        Reads straight from the router so the pill always reflects the real
+        backend that will serve the next request — never a decorative label.
+        """
+        return self.agent.router.label, self.agent.router.model
 
     def _refresh_provider_pill(self):
         """Update the header pill text to the selected provider."""
-        label, model = self._provider_model()
-        self._provider_lbl.config(text=label)
-        self._model_lbl.config(text=" · " + model)
+        label, model = self._provider_pill_text()
+        self._provider_lbl.config(text=label or "")
+        self._model_lbl.config(text=" · " + (model or ""))
 
     def _on_provider_hover(self, hovering):
         """Lighten the pill while the mouse is over it (hover feedback)."""
@@ -379,45 +372,57 @@ class AgentKafleGUI(tk.Tk):
     def _select_provider(self, key):
         """Handle picking a provider from the menu.
 
-        Switches the Agent's actual LLM backend first and only then updates
-        the GUI pill, so the displayed provider always matches the backend
-        that will serve the next request (both respond() and reason()).
+        Switches the Agent's actual LLM backend (via the shared router) first
+        and only then updates the GUI pill, so the displayed provider always
+        matches the backend that will serve the next request (both respond()
+        and reason()).
         """
-        if key not in PROVIDERS:
+        if key not in self._providers:
             return
 
-        if key == self._active_provider:
+        if key == self.agent.provider_name:
             return
 
-        info = PROVIDERS[key]
+        info = self._providers[key]
         if not info["configured"]:
             # Provider not configured - show error but don't switch
             self._append_error(
                 f"{info['label']} is not configured. "
-                "Set GEMINI_API_KEY environment variable and restart."
+                "Set the required environment variables and restart."
             )
             return
 
         # Switch the Agent's real LLM backend before touching the GUI so a
-        # failed switch can never be reported as successful.
+        # failed switch can never be reported as successful. A failed switch
+        # leaves the router on the previous provider (confirmed by the router).
         try:
             self.agent.set_provider(key)
+        except ProviderConfigError as e:
+            self._append_error(f"{info['label']} is not configured: {e}")
+            return
         except Exception as e:
             self._append_error(f"Failed to switch to {info['label']}: {e}")
             return
 
-        self._active_provider = key
         self._refresh_provider_pill()
 
+        model = self.agent.router.model
         self._append_agent(
-            f"Provider set to {info['label']} ({info['value']})."
+            f"Provider set to {info['label']} ({model})."
         )
 
     def _open_provider_menu(self, _event=None):
-        """Show the provider chooser menu under the header pill."""
+        """Show the provider chooser menu under the header pill.
+
+        Entries come from the router's registry metadata; configured status is
+        shown next to each provider.
+        """
         menu = tk.Menu(self, tearoff=0)
-        for key, info in PROVIDERS.items():
-            label = f"{info['label']} · {info['value']}"
+        active = self.agent.provider_name
+        for key, info in self._providers.items():
+            status = " ✓" if key == active else ""
+            status = status + " (not configured)" if not info["configured"] else status
+            label = f"{info['label']} · {info['default_model']}{status}"
             menu.add_command(
                 label=label, command=lambda k=key: self._select_provider(k)
             )
@@ -570,7 +575,7 @@ class AgentKafleGUI(tk.Tk):
             # conversation's context (bounded inside AgentKafle.respond).
             response = self.agent.respond(user_text, history=self._history)
         except Exception as exc:
-            self.after(0, self._on_llm_error, str(exc))
+            self.after(0, self._on_llm_error, exc)
             return
         self.after(0, self._on_llm_done, response)
 
@@ -584,11 +589,12 @@ class AgentKafleGUI(tk.Tk):
         self._stop_spinner()
         self._set_busy(False)
 
-        # The Ollama-specific hint only applies when Ollama is the active
-        # backend; a Gemini request must never be reported as an Ollama
-        # connection failure.
-        if self._active_provider == "ollama" and any(
-            word in error.lower() for word in ("connect", "refused", "url")
+        # Connection failures are normalized by the provider into
+        # ProviderConnectionError — no brittle string-matching needed. The
+        # Ollama-specific hint only applies when Ollama is the active backend.
+        if (
+            self.agent.provider_name == "ollama"
+            and isinstance(error, ProviderConnectionError)
         ):
             friendly = (
                 "Could not reach Ollama. Please ensure it is running:\n"

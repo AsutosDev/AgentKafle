@@ -29,7 +29,7 @@ The detective persona (system prompt) lives in persona.py, not here.
 import re
 from enum import Enum
 
-from llm import create_llm
+from llm import ProviderRouter
 from persona import Persona
 from cases import CaseManager, CaseStatus
 from evidence import EvidenceManager, EvidenceType, EvidenceStatus
@@ -88,33 +88,52 @@ MEMORY_KEYWORDS = (
 
 
 class AgentKafle:
-    def __init__(self, name="AgentKafle", provider="ollama"):
+    def __init__(self, name="AgentKafle", provider="ollama", router=None, model=None):
         self.name = name
-        self.provider_name = provider.lower().strip()
-        self.llm = create_llm(self.provider_name)
+
+        # The router is the single authoritative holder of the active LLM.
+        # The Agent and the Detective share it, so both can never drift onto
+        # different backends.
+        self.router = (
+            router if router is not None else ProviderRouter(default=provider, model=model)
+        )
+
         self.persona = Persona(agent_name=name)
         self.case_manager = CaseManager()
         self.evidence_manager = EvidenceManager()
         self.memory = MemoryStore()
-        self.detective = Detective(self.case_manager, self.evidence_manager, self.llm)
+        self.detective = Detective(self.case_manager, self.evidence_manager, self.router)
 
-    def set_provider(self, provider):
+    # ── active provider (through the router) ───────────────────────────────
+
+    @property
+    def llm(self):
+        """The active provider owned by the router.
+
+        This is always the same instance the Detective sees; there is no
+        separately-held LLM reference that could go stale.
+        """
+        return self.router.provider
+
+    @property
+    def provider_name(self):
+        """Key of the active provider (e.g. "ollama")."""
+        return self.router.name or ""
+
+    def set_provider(self, provider, model=None):
         """Switch the LLM backend used by respond() and Detective.reason().
 
-        Creates the new provider, installs it as this agent's LLM, and points
-        the Detective at the very same instance — so every request (normal
-        chat, memory, case/evidence queries, and structured detective
-        reasoning) is served by the selected backend.
+        Delegates to the shared ProviderRouter, which swaps in the new
+        provider and closes the old one. Because both the Agent and the
+        Detective route their requests through the same router, a switch here
+        immediately applies to normal chat, memory, case/evidence queries,
+        and structured detective reasoning alike.
 
         If the provider cannot be created (e.g. a missing Gemini API key or
-        an unknown provider name), this raises and leaves the Agent's
-        backend unchanged.
+        an unknown provider name), this raises and leaves the active backend
+        unchanged.
         """
-        provider = provider.lower().strip()
-        llm = create_llm(provider)
-        self.provider_name = provider
-        self.llm = llm
-        self.detective.set_llm(llm)
+        self.router.switch(provider, model=model)
 
     # ── Case operations (application logic, never sent to the LLM) ────────
 
@@ -629,7 +648,7 @@ class AgentKafle:
 
         messages.append({"role": "user", "content": user_message})
 
-        return self.llm.chat(messages)
+        return self.router.chat(messages)
 
     def _recent_history_messages(self, history, max_turns=6):
         """Turn the last few (role, text) turns into LLM chat messages.
