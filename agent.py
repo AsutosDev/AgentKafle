@@ -13,16 +13,28 @@ CaseManager, EvidenceManager, and MemoryStore are the single sources of
 truth for structured data. The LLM only receives text context when reasoning
 is required, and it can never write memory directly.
 
+Routing: every user message is classified into a context mode, which
+determines what information is included in the LLM prompt.
+
+  NORMAL      — general chat, questions; persona only
+  MEMORY      — memory store/recall; persona + relevant memories
+  CASE        — case management; persona + active case summary
+  EVIDENCE    — evidence queries; persona + active case + its evidence
+  DETECTIVE   — investigation/reasoning; persona + case + evidence + detective
+                reasoning via Detective.reason()
+
 The detective persona (system prompt) lives in persona.py, not here.
 """
 
 import re
+from enum import Enum
 
 from llm import LLMInterface
 from persona import Persona
 from cases import CaseManager, CaseStatus
 from evidence import EvidenceManager, EvidenceType, EvidenceStatus
 from memory import MemoryStore, MemoryType, MemoryImportance
+from detective import Detective
 
 
 # Maps user-friendly type names to EvidenceType values.
@@ -35,6 +47,46 @@ EVIDENCE_TYPES = {
 }
 
 
+# ── Context modes ──────────────────────────────────────────────────────────
+# Each mode determines what context is included in the LLM prompt.
+
+class ContextMode(Enum):
+    NORMAL = "NORMAL"          # General chat, questions; persona only
+    MEMORY = "MEMORY"          # Memory store/recall; persona + relevant memories
+    CASE = "CASE"              # Case management; persona + active case summary
+    EVIDENCE = "EVIDENCE"      # Evidence queries; persona + active case + evidence
+    DETECTIVE = "DETECTIVE"    # Investigation; persona + case + evidence + detective reasoning
+
+
+# ── Intent classification keywords ─────────────────────────────────────────
+# Used by _classify_intent() to determine the context mode from user input.
+# Order matters: DETECTIVE before EVIDENCE before CASE before MEMORY.
+
+DETECTIVE_KEYWORDS = (
+    "investigate", "analyze", "analyze the", "reason", "who could", "who might",
+    "hypothesis", "contradiction", "solve this case", "what happened",
+    "find contradictions", "current hypothesis", "investigation",
+)
+
+EVIDENCE_KEYWORDS = (
+    "evidence", "show evidence", "list evidence", "what evidence",
+    "add evidence", "verify evidence", "dispute evidence", "delete evidence",
+    "view evidence", "evidence for",
+)
+
+CASE_KEYWORDS = (
+    "case", "create case", "new case", "list cases", "list my cases",
+    "show case", "view case", "open case", "select case", "close case",
+    "solve case", "delete case", "my cases", "what cases",
+    "current case", "active case", "case details",
+)
+
+MEMORY_KEYWORDS = (
+    "remember that", "remember my", "do you remember", "what do you remember",
+    "what have you remembered", "recall", "forget that",
+)
+
+
 class AgentKafle:
     def __init__(self, name="AgentKafle"):
         self.name = name
@@ -43,6 +95,7 @@ class AgentKafle:
         self.case_manager = CaseManager()
         self.evidence_manager = EvidenceManager()
         self.memory = MemoryStore()
+        self.detective = Detective(self.case_manager, self.evidence_manager, self.llm)
 
     # ── Case operations (application logic, never sent to the LLM) ────────
 
@@ -410,36 +463,147 @@ class AgentKafle:
         match = re.search(r"(?i)\bevd-\d+\b", text)
         return match.group(0).upper() if match else None
 
+    # ── Intent classification / routing ─────────────────────────────────────
+
+    def _classify_intent(self, text):
+        """Determine the context mode from the user's message.
+
+        Returns a ContextMode. Priority: DETECTIVE > EVIDENCE > CASE > MEMORY > NORMAL.
+        """
+        lower = text.lower().strip()
+
+        # DETECTIVE: explicit investigation/reasoning requests
+        for kw in DETECTIVE_KEYWORDS:
+            if kw in lower:
+                return ContextMode.DETECTIVE
+
+        # EVIDENCE: evidence-specific queries
+        for kw in EVIDENCE_KEYWORDS:
+            if kw in lower:
+                return ContextMode.EVIDENCE
+
+        # CASE: case management queries
+        for kw in CASE_KEYWORDS:
+            if kw in lower:
+                return ContextMode.CASE
+
+        # MEMORY: explicit memory store/recall
+        for kw in MEMORY_KEYWORDS:
+            if kw in lower:
+                return ContextMode.MEMORY
+
+        return ContextMode.NORMAL
+
+    def _build_system_prompt(self, mode):
+        """Build the system prompt for a given context mode."""
+        if mode == ContextMode.DETECTIVE:
+            # Full detective persona from persona.py
+            return self.persona.system_prompt
+        # For all other modes, use a helpful assistant persona
+        return (
+            f"You are {self.name}, a helpful personal AI assistant. "
+            "Answer clearly and concisely. Use the conversation history when relevant. "
+            "If the user asks you to remember something, acknowledge it but do not "
+            "fabricate memories."
+        )
+
+    def _build_context_blocks(self, mode, user_message):
+        """Return a list of system-context blocks for the given mode.
+
+        Each block is a string that will be added as a system message.
+        """
+        blocks = []
+        active_case = self.case_manager.get_active()
+
+        if mode == ContextMode.CASE:
+            if active_case:
+                blocks.append(self._format_case_summary(active_case))
+            else:
+                blocks.append("No active case.")
+
+        elif mode == ContextMode.EVIDENCE:
+            if active_case:
+                blocks.append(self._format_case_summary(active_case))
+                blocks.append(self._build_case_evidence(active_case))
+            else:
+                blocks.append("No active case to show evidence for.")
+
+        elif mode == ContextMode.DETECTIVE:
+            if active_case:
+                # Build full investigation and run detective reasoning
+                inv, _ = self.detective.investigate(active_case.id)
+                if inv:
+                    result, _ = self.detective.reason(inv)
+                    if result:
+                        blocks.append(result.as_text())
+            else:
+                blocks.append("No active case to investigate.")
+
+        # MEMORY mode doesn't add a case block; recall is handled in respond()
+        # NORMAL mode adds no extra blocks
+
+        return blocks
+
+    def _format_case_summary(self, case):
+        """Short case summary for CASE/EVIDENCE modes."""
+        return (
+            f"ACTIVE CASE\n"
+            f"Case ID: {case.id}\n"
+            f"Title: {case.title}\n"
+            f"Status: {case.status}\n"
+            f"Description: {case.description or '(no description)'}"
+        )
+
+    def _build_case_evidence(self, case):
+        """Evidence list for EVIDENCE mode (no reasoning rules)."""
+        items = self.evidence_manager.list_for_case(case.id)
+        if not items:
+            return "EVIDENCE: (none recorded yet)"
+
+        lines = [f"EVIDENCE ({len(items)} item(s)):"]
+        for status in (EvidenceStatus.VERIFIED,
+                       EvidenceStatus.UNVERIFIED,
+                       EvidenceStatus.DISPUTED):
+            group = [i for i in items if i.status == status]
+            if not group:
+                continue
+            lines.append(f"[{status.value}]")
+            for item in group:
+                lines.append(f"  {item.id} — {item.title} [{item.evidence_type.value}]")
+        return "\n".join(lines)
+
     # ── LLM reasoning ─────────────────────────────────────────────────────
 
     def respond(self, user_message, history=None, top_k=5):
         """Get an LLM-generated response.
 
-        Adds four kinds of context, in order:
-          1. The persona system prompt.
-          2. Active case + evidence context (existing behaviour).
-          3. Bounded recent conversation (history, optional — the GUI
-             passes its _history so this session's past turns are visible).
-          4. Relevant long-term memories recalled from MemoryStore.
-
-        Case/evidence data and memory are passed as text only. The model
-        cannot modify them; all changes go through the managers above.
+        1. Classify the user's intent to determine context mode.
+        2. Build the appropriate system prompt for that mode.
+        3. Add context blocks (case, evidence, detective reasoning) as needed.
+        4. Add bounded recent conversation history.
+        5. Add relevant long-term memories (always, relevance-based).
+        6. Send to LLM.
         """
-        system_prompt = self.persona.system_prompt
+        mode = self._classify_intent(user_message)
 
-        active_case = self.case_manager.get_active()
-        if active_case:
-            system_prompt += self._build_case_context(active_case)
+        # System prompt appropriate to the mode
+        system_prompt = self._build_system_prompt(mode)
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-        ]
+        # Context blocks (case, evidence, detective reasoning)
+        context_blocks = self._build_context_blocks(mode, user_message)
 
-        # Short-term context: the last few conversation turns (if given).
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Add context blocks as system messages
+        for block in context_blocks:
+            if block:
+                messages.append({"role": "system", "content": block})
+
+        # Short-term conversation history
         if history:
             messages += self._recent_history_messages(history)
 
-        # Long-term context: memories relevant to what the user just asked.
+        # Long-term memory recall (always, based on query relevance)
         recalled, _ = self.memory.recall(user_message, top_k=top_k)
         if recalled:
             messages.append({"role": "system", "content": recalled})
