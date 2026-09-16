@@ -16,7 +16,6 @@ Architecture:
 
 import threading
 import tkinter as tk
-from urllib.parse import urlparse
 
 from agent import AgentKafle
 
@@ -28,6 +27,19 @@ SPINNER_DELAY_MS = 80
 # Message bubbles never grow wider than this.
 BUBBLE_MAX_FRACTION = 0.72
 BUBBLE_ABSOLUTE_MAX = 640
+
+
+# ── Provider registry ─────────────────────────────────────────────────────
+# Single place that describes the providers the header can select.
+# "configured": False means the backend does not exist yet (Gemini), so the
+# GUI only shows a "coming soon" note instead of making fake requests.
+# A real Gemini backend plugs in here later without redesigning any GUI code.
+# ───────────────────────────────────────────────────────────────────────────
+
+PROVIDERS = {
+    "ollama": {"label": "OLLAMA", "value": "llama3.2:3b", "configured": True},
+    "gemini": {"label": "GEMINI", "value": "Not configured", "configured": False},
+}
 
 
 class AgentKafleGUI(tk.Tk):
@@ -47,6 +59,14 @@ class AgentKafleGUI(tk.Tk):
         # model sees the full conversation.
         self._history = []
 
+        # Provider selection state. "ollama" is the default and the only
+        # configured backend for now. See PROVIDERS above.
+        self._active_provider = "ollama"
+
+        # Input field placeholder ("ghost text") state.
+        self._entry_placeholder = "Ask AgentKafle…"
+        self._entry_is_placeholder = True
+
         self._setup_style()
         self._build_ui()
         self._refresh_case_info()
@@ -58,15 +78,26 @@ class AgentKafleGUI(tk.Tk):
     # ── Style ─────────────────────────────────────────────────────────────
 
     def _setup_style(self):
+        # One consistent contrast system. Every text colour is chosen so it
+        # keeps roughly >= 4.5:1 contrast against the surface it sits on
+        # (WCAG AA for normal text). The ratios are noted per token:
+        #   on_accent  #ffffff on accent #2563eb  -> 5.2:1
+        #   muted      #a5aebc on any panel       -> >= 6.3:1
+        #   placeholder #9aa4b4 on surface        -> 6.4:1
+        #   user_fg    #ffffff on user_bg        -> 5.7:1
+        #   error      #ff7a7a on error_bg        -> 5.7:1
         self._c = {
             "bg":       "#17181c",   # window background
-            "surface":  "#1e2126",   # raised panels
+            "surface":  "#1e2126",   # raised panels (case bar, input box)
             "surface2": "#272b33",   # agent message bubble
-            "border":   "#353b46",   # hairlines and field outlines
-            "text":     "#eceff4",   # primary text
-            "muted":    "#8b95a5",   # secondary text
-            "accent":   "#3b82f6",   # mac-blue accent
-            "accent_d": "#2f69cf",   # pressed accent
+            "border":   "#3b4252",   # hairlines and field outlines
+            "text":     "#eceff4",   # primary text (15.4:1 on background)
+            "muted":    "#a5aebc",   # secondary text (>= 6.3:1 everywhere)
+            "placeholder": "#9aa4b4",  # input ghost text
+            "accent":   "#2563eb",   # action colour — darker for contrast
+            "accent_d": "#1d4ed8",   # accent pressed / hovered
+            "accent_disabled": "#333a47",  # send button while busy
+            "on_accent": "#ffffff",  # text drawn on the accent colour
             "user_bg":  "#2f5fd0",   # user message bubble
             "user_fg":  "#ffffff",
             "error_bg": "#3a2426",   # error message bubble
@@ -74,17 +105,17 @@ class AgentKafleGUI(tk.Tk):
             "status":   {            # case status → dot colour
                 "OPEN":   "#4cd964",
                 "SOLVED": "#5ac8fa",
-                "CLOSED": "#9aa0a6",
+                "CLOSED": "#aab2bd",
             },
         }
         self._f = {
-            "title":   ("Helvetica Neue", 17, "bold"),
-            "app":     ("Helvetica Neue", 12),
-            "app_mid": ("Helvetica Neue", 11),
-            "small":   ("Helvetica Neue", 10),
-            "xsmall":  ("Helvetica Neue", 9),
-            "eyebrow": ("Helvetica Neue", 8, "bold"),
-            "badge":   ("Helvetica Neue", 10, "bold"),
+            "title":   ("Helvetica Neue", 18, "bold"),
+            "app":     ("Helvetica Neue", 13),
+            "app_mid": ("Helvetica Neue", 12),
+            "small":   ("Helvetica Neue", 11),
+            "xsmall":  ("Helvetica Neue", 10),
+            "eyebrow": ("Helvetica Neue", 9, "bold"),
+            "badge":   ("Helvetica Neue", 11, "bold"),
         }
         self.configure(bg=self._c["bg"])
 
@@ -112,22 +143,43 @@ class AgentKafleGUI(tk.Tk):
                  fg=self._c["muted"], font=self._f["small"],
                  anchor="w").pack(anchor="w", pady=(1, 0))
 
-        # Provider / model indicator.  The chevron is reserved for a future
-        # provider selector and is intentionally inert for now.
-        provider, model = self._provider_model()
-        pill = tk.Frame(header, bg=self._c["surface"],
-                        highlightbackground=self._c["border"],
-                        highlightthickness=1)
-        pill.pack(side=tk.RIGHT, anchor="s", pady=(0, 4))
-        tk.Label(pill, text=provider, bg=self._c["surface"],
-                 fg=self._c["muted"], font=self._f["xsmall"]
-                 ).pack(side=tk.LEFT, padx=(10, 0), pady=5)
-        tk.Label(pill, text=" · " + model, bg=self._c["surface"],
-                 fg=self._c["text"], font=self._f["xsmall"]
-                 ).pack(side=tk.LEFT, pady=5)
-        tk.Label(pill, text="⌄", bg=self._c["surface"],
-                 fg=self._c["muted"], font=self._f["small"]
-                 ).pack(side=tk.LEFT, padx=(8, 10), pady=5)
+        # Provider / model selector. Clicking the pill opens a small menu
+        # (see _open_provider_menu). Only Ollama is configured for now;
+        # Gemini shows a "coming soon" note instead of making fake requests.
+        self._provider_pill = tk.Frame(
+            header, bg=self._c["surface"],
+            highlightbackground=self._c["border"],
+            highlightthickness=1, cursor="hand2",
+        )
+        self._provider_pill.pack(side=tk.RIGHT, anchor="s", pady=(0, 4))
+
+        self._provider_lbl = tk.Label(
+            self._provider_pill, bg=self._c["surface"], fg=self._c["muted"],
+            font=self._f["xsmall"], cursor="hand2",
+        )
+        self._provider_lbl.pack(side=tk.LEFT, padx=(10, 0), pady=5)
+
+        self._model_lbl = tk.Label(
+            self._provider_pill, bg=self._c["surface"], fg=self._c["text"],
+            font=self._f["xsmall"], cursor="hand2",
+        )
+        self._model_lbl.pack(side=tk.LEFT, pady=5)
+
+        self._chevron_lbl = tk.Label(
+            self._provider_pill, text="⌄", bg=self._c["surface"],
+            fg=self._c["muted"], font=self._f["small"], cursor="hand2",
+        )
+        self._chevron_lbl.pack(side=tk.LEFT, padx=(8, 10), pady=5)
+
+        # Bind click + hover on the frame and every label inside it, since
+        # tkinter events do not bubble up to a parent widget on their own.
+        for widget in (self._provider_pill, self._provider_lbl,
+                       self._model_lbl, self._chevron_lbl):
+            widget.bind("<Button-1>", self._open_provider_menu)
+            widget.bind("<Enter>", lambda e: self._on_provider_hover(True))
+            widget.bind("<Leave>", lambda e: self._on_provider_hover(False))
+
+        self._refresh_provider_pill()
 
     def _build_case_bar(self):
         bar = tk.Frame(self, bg=self._c["surface"])
@@ -211,16 +263,23 @@ class AgentKafleGUI(tk.Tk):
                          padx=(14, 6), ipady=7, pady=5)
         self._entry.bind("<Return>", self._on_enter)
         self._entry.bind("<KP_Enter>", self._on_enter)
+        self._entry.bind("<Key>", self._on_entry_key)
+        self._entry.bind("<FocusOut>", self._on_entry_focus_out)
 
-        self._send_btn = tk.Button(
-            box, text="Send", bg=self._c["accent"], fg=self._c["user_fg"],
-            activebackground=self._c["accent_d"], activeforeground="#ffffff",
-            font=("Helvetica Neue", 11, "bold"), relief=tk.FLAT,
-            highlightthickness=0, bd=0, padx=18, pady=7, cursor="hand2",
-            command=self._on_send,
+        # Send is drawn with a Label (not tk.Button) so the background and
+        # text colours render identically on every platform — the default
+        # macOS button can ignore fg and make white text invisible.
+        self._send_btn = tk.Label(
+            box, text="Send", bg=self._c["accent"], fg=self._c["on_accent"],
+            font=("Helvetica Neue", 13, "bold"), relief=tk.FLAT,
+            padx=18, pady=8, cursor="hand2",
         )
         self._send_btn.pack(side=tk.RIGHT, padx=(6, 6), pady=5)
+        self._send_btn.bind("<Button-1>", lambda e: self._on_send())
+        self._send_btn.bind("<Enter>", lambda e: self._on_send_hover(True))
+        self._send_btn.bind("<Leave>", lambda e: self._on_send_hover(False))
 
+        self._show_placeholder()
         self._entry.focus_set()
 
     # ── Chat rendering ────────────────────────────────────────────────────
@@ -288,16 +347,74 @@ class AgentKafleGUI(tk.Tk):
     def _on_mousewheel_linux(self, event):
         self._chat.yview_scroll(-1 if event.num == 4 else 1, "units")
 
-    # ── Provider / model ──────────────────────────────────────────────────
+    # ── Provider / model selector ─────────────────────────────────────────
 
     def _provider_model(self):
-        llm = self.agent.llm
-        host = urlparse(llm.base_url).hostname or "localhost"
-        if host in ("localhost", "127.0.0.1"):
-            provider = "OLLAMA"
+        """Return (label, model) of the currently selected provider."""
+        info = PROVIDERS[self._active_provider]
+        return info["label"], info["value"]
+
+    def _refresh_provider_pill(self):
+        """Update the header pill text to the selected provider."""
+        label, model = self._provider_model()
+        self._provider_lbl.config(text=label)
+        self._model_lbl.config(text=" · " + model)
+
+    def _on_provider_hover(self, hovering):
+        """Lighten the pill while the mouse is over it (hover feedback)."""
+        bg = self._c["surface2"] if hovering else self._c["surface"]
+        self._provider_pill.config(bg=bg)
+        for widget in (self._provider_lbl, self._model_lbl, self._chevron_lbl):
+            widget.config(bg=bg)
+
+    def _select_provider(self, key):
+        """Handle picking a provider from the menu.
+
+        The header pill always updates to the chosen provider. For
+        providers that are not configured yet (Gemini), we only show an
+        honest "coming soon" note: no API key, no fake request, and Ollama
+        keeps handling all requests.
+        """
+        if key not in PROVIDERS:
+            return
+
+        if key == self._active_provider:
+            return
+
+        self._active_provider = key
+        self._refresh_provider_pill()
+
+        info = PROVIDERS[key]
+        if info["configured"]:
+            self._append_agent(
+                f"Provider set to {info['label']} ({info['value']})."
+            )
         else:
-            provider = host.upper()
-        return provider, llm.model
+            # The Gemini backend does not exist yet, so we never pretend it
+            # works: requests continue through Ollama.
+            self._append_agent(
+                f"{info['label']} integration is coming soon and is not "
+                "configured yet. Ollama is still handling requests."
+            )
+
+    def _open_provider_menu(self, _event=None):
+        """Show the provider chooser menu under the header pill."""
+        menu = tk.Menu(self, tearoff=0)
+        for key, info in PROVIDERS.items():
+            label = f"{info['label']} · {info['value']}"
+            menu.add_command(
+                label=label, command=lambda k=key: self._select_provider(k)
+            )
+
+        # Post the menu just below the pill.
+        try:
+            menu.tk_popup(
+                self._provider_pill.winfo_rootx(),
+                self._provider_pill.winfo_rooty()
+                + self._provider_pill.winfo_height() + 4,
+            )
+        finally:
+            menu.grab_release()
 
     # ── Case info display ─────────────────────────────────────────────────
 
@@ -320,11 +437,19 @@ class AgentKafleGUI(tk.Tk):
 
     def _set_busy(self, busy):
         self._busy = busy
+
+        # The send control is a Label, so the busy state is drawn by
+        # swapping its colours (tk.Button's state= option is not needed).
+        if busy:
+            self._send_btn.config(bg=self._c["accent_disabled"], cursor="arrow")
+        else:
+            self._send_btn.config(bg=self._c["accent"], cursor="hand2")
+
         state = tk.DISABLED if busy else tk.NORMAL
-        self._send_btn.config(state=state)
         self._entry.config(state=state)
         if not busy:
             self._entry.focus_set()
+            self._restore_placeholder()
 
     # ── Loading spinner ───────────────────────────────────────────────────
 
@@ -348,6 +473,40 @@ class AgentKafleGUI(tk.Tk):
             self._spinner_id = None
         self._spinner_lbl.config(text="")
 
+    # ── Input placeholder (ghost text) ───────────────────────────────────
+
+    def _show_placeholder(self):
+        """Show dimmed placeholder text when the entry is empty."""
+        self._entry.config(fg=self._c["placeholder"])
+        self._entry.delete(0, tk.END)
+        self._entry.insert(0, self._entry_placeholder)
+        self._entry_is_placeholder = True
+
+    def _on_entry_key(self, _event=None):
+        """Remove the placeholder as soon as the user types anything."""
+        if self._entry_is_placeholder:
+            self._entry.delete(0, tk.END)
+            self._entry.config(fg=self._c["text"])
+            self._entry_is_placeholder = False
+
+    def _on_entry_focus_out(self, _event=None):
+        """Bring the placeholder back when the field is emptied and left."""
+        if not self._entry.get().strip() and not self._entry_is_placeholder:
+            self._show_placeholder()
+
+    def _restore_placeholder(self):
+        """Re-show the placeholder after a message is sent."""
+        if not self._entry.get().strip() and not self._entry_is_placeholder:
+            self._show_placeholder()
+
+    def _on_send_hover(self, hovering):
+        """Darken the Send button while hovered (skipped while busy)."""
+        if self._busy:
+            return
+        self._send_btn.config(
+            bg=self._c["accent_d"] if hovering else self._c["accent"],
+        )
+
     # ── Send / Enter ──────────────────────────────────────────────────────
 
     def _on_enter(self, _event=None):
@@ -358,11 +517,15 @@ class AgentKafleGUI(tk.Tk):
         if self._busy:
             return
 
+        if self._entry_is_placeholder:
+            return
+
         user_text = self._entry.get().strip()
         if not user_text:
             return
 
         self._entry.delete(0, tk.END)
+        self._entry.config(fg=self._c["text"])
         self._append_user(user_text)
         self._history.append(("user", user_text))
 
@@ -372,6 +535,7 @@ class AgentKafleGUI(tk.Tk):
             self._history.append(("agent", response))
             self._append_agent(response)
             self._refresh_case_info()
+            self._restore_placeholder()
             return
 
         # LLM call: run in background thread so GUI stays responsive.
