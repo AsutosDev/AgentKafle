@@ -8,3 +8,6 @@ __pycache__/
 
 # Runtime case data (created by CaseManager)
 cases/
+
+# Runtime memory data (created by MemoryStore)
+memory/

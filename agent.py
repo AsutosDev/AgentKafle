@@ -5,11 +5,13 @@ between the user and four collaborators:
 
   User → AgentKafle → CaseManager      (structured case data, no LLM)
                     → EvidenceManager  (structured evidence data, no LLM)
+                    → MemoryStore      (persistent long-term memory, no LLM)
                     → Persona + LLM    (language and reasoning)
 
-Key rule: the LLM never reads or writes case or evidence files. CaseManager
-and EvidenceManager are the single sources of truth for structured data. The
-LLM only receives a text summary when reasoning is required.
+Key rule: the LLM never reads or writes case, evidence, or memory files.
+CaseManager, EvidenceManager, and MemoryStore are the single sources of
+truth for structured data. The LLM only receives text context when reasoning
+is required, and it can never write memory directly.
 
 The detective persona (system prompt) lives in persona.py, not here.
 """
@@ -20,6 +22,7 @@ from llm import LLMInterface
 from persona import Persona
 from cases import CaseManager, CaseStatus
 from evidence import EvidenceManager, EvidenceType, EvidenceStatus
+from memory import MemoryStore, MemoryType, MemoryImportance
 
 
 # Maps user-friendly type names to EvidenceType values.
@@ -39,6 +42,7 @@ class AgentKafle:
         self.persona = Persona(agent_name=name)
         self.case_manager = CaseManager()
         self.evidence_manager = EvidenceManager()
+        self.memory = MemoryStore()
 
     # ── Case operations (application logic, never sent to the LLM) ────────
 
@@ -204,6 +208,37 @@ class AgentKafle:
             f"Created: {item.created_at}\n"
             f"Updated: {item.updated_at}"
         )
+
+    # ── Memory operations ────────────────────────────────────────────────
+    # Long-term memory lives in MemoryStore; the agent only forwards calls.
+    # The LLM never writes memory directly.
+
+    def remember(self, content, memory_type=MemoryType.SEMANTIC,
+                 source="", importance=MemoryImportance.MEDIUM,
+                 case_id="", confidence="", tags=None):
+        """Persist a new memory and return the confirmation message."""
+        _, message = self.memory.add(
+            content, memory_type=memory_type, source=source,
+            importance=importance, case_id=case_id, confidence=confidence,
+            tags=tags,
+        )
+        return message
+
+    def recall(self, query, top_k=5):
+        """Return the best relevant memories as a formatted text block."""
+        block, message = self.memory.recall(query, top_k=top_k)
+        return block if block else message
+
+    def list_memories(self):
+        """Return a formatted list of every stored memory."""
+        memories = self.memory.list_all()
+        if not memories:
+            return "No memories stored yet."
+        lines = []
+        for m in memories:
+            flag = "" if m.active else " [forgotten]"
+            lines.append(f"{m.id} [{m.type.value}/{m.importance.value}] {m.content}{flag}")
+        return "\n".join(lines)
 
     # ── Command router ────────────────────────────────────────────────────
     # Detects case and evidence commands in plain language. Returns
@@ -377,11 +412,18 @@ class AgentKafle:
 
     # ── LLM reasoning ─────────────────────────────────────────────────────
 
-    def respond(self, user_message):
-        """Get an LLM-generated response, with active case context attached.
+    def respond(self, user_message, history=None, top_k=5):
+        """Get an LLM-generated response.
 
-        Case and evidence data are passed as text only. The model cannot
-        modify them; all changes go through the managers above.
+        Adds four kinds of context, in order:
+          1. The persona system prompt.
+          2. Active case + evidence context (existing behaviour).
+          3. Bounded recent conversation (history, optional — the GUI
+             passes its _history so this session's past turns are visible).
+          4. Relevant long-term memories recalled from MemoryStore.
+
+        Case/evidence data and memory are passed as text only. The model
+        cannot modify them; all changes go through the managers above.
         """
         system_prompt = self.persona.system_prompt
 
@@ -391,10 +433,33 @@ class AgentKafle:
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
         ]
 
+        # Short-term context: the last few conversation turns (if given).
+        if history:
+            messages += self._recent_history_messages(history)
+
+        # Long-term context: memories relevant to what the user just asked.
+        recalled, _ = self.memory.recall(user_message, top_k=top_k)
+        if recalled:
+            messages.append({"role": "system", "content": recalled})
+
+        messages.append({"role": "user", "content": user_message})
+
         return self.llm.chat(messages)
+
+    def _recent_history_messages(self, history, max_turns=6):
+        """Turn the last few (role, text) turns into LLM chat messages.
+
+        Bounds the amount of conversation sent so the context window does
+        not grow forever. This is short-term context, not long-term memory.
+        """
+        recent = history[-max_turns * 2:]
+        messages = []
+        for role, text in recent:
+            llm_role = "assistant" if role == "agent" else "user"
+            messages.append({"role": llm_role, "content": text})
+        return messages
 
     def _build_case_context(self, case):
         """Build the case + evidence text block for the system prompt."""

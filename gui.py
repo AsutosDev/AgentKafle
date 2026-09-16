@@ -550,7 +550,9 @@ class AgentKafleGUI(tk.Tk):
     def _llm_worker(self, user_text):
         """Runs on a background thread.  Posts the result back with root.after()."""
         try:
-            response = self.agent.respond(user_text)
+            # Pass the session's recent conversation so the LLM can see this
+            # conversation's context (bounded inside AgentKafle.respond).
+            response = self.agent.respond(user_text, history=self._history)
         except Exception as exc:
             self.after(0, self._on_llm_error, str(exc))
             return
