@@ -39,6 +39,12 @@ from datetime import datetime, timezone
 from enum import Enum
 
 
+# Project root (directory containing this file) so the default memory path is
+# stable regardless of the process's current working directory.
+_PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+_DEFAULT_MEMORY_DIR = os.path.join(_PROJECT_ROOT, "memory")
+
+
 # ── Memory type & importance ──────────────────────────────────────────────
 # Plain str-Enums so these serialise cleanly to JSON, matching EvidenceType.
 
@@ -251,7 +257,7 @@ class KeywordRetriever:
 # get() / list_all() which return plain data like CaseManager does.
 
 class MemoryStore:
-    def __init__(self, storage_dir="memory", filename="memories.json"):
+    def __init__(self, storage_dir=_DEFAULT_MEMORY_DIR, filename="memories.json"):
         self.storage_dir = storage_dir
         self.filename = filename
         self.memories = {}          # id string → Memory object
