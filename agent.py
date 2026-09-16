@@ -26,6 +26,8 @@ determines what information is included in the LLM prompt.
 The detective persona (system prompt) lives in persona.py, not here.
 """
 
+__version__ = "1.0.0"
+
 import re
 from enum import Enum
 

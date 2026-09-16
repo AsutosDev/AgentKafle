@@ -1,34 +1,31 @@
-# AgentKafle
+# AgentKafle v1.0.0
 
 AgentKafle is an AI detective assistant built in Python. It receives a case,
 investigates it, and reasons its way toward a final report.
 
-This project is built in 7 steps:
+**Features:**
 
-1. Foundation — LLM integration, project structure
-2. Detective identity & behavior — persona, reasoning categories
-3. Case management — cases, statuses, active case, JSON persistence
-4. Evidence tracking — items, types, statuses, JSON persistence
-5. GUI — chat interface, case/evidence awareness, loading animation (current)
-6. Memory — long-term store and retrieval for case knowledge
-7. Reasoning — hypotheses, suspect analysis, final report
-
-AgentKafle connects to a pre-trained language model, behaves like an
-analytical AI detective, manages cases and evidence that persist between
-sessions, and provides a desktop GUI with real-time loading animation.
-Memory and advanced reasoning arrive in later steps.
+- **Local accounts** — create/login/logout with secure PBKDF2 password hashing
+- **Persistent chat history** — conversations survive restarts, per-user isolation
+- **Multiple conversations** — new chat, rename, delete, auto-titling
+- **Provider-agnostic LLM layer** — Ollama (local) + Gemini (cloud) supported
+- **ProviderRouter** — single active provider, instant switching, shared by Agent & Detective
+- **Detective reasoning** — structured JSON analysis of cases & evidence
+- **Cases & evidence** — JSON persistence, status tracking (VERIFIED/UNVERIFIED/DISPUTED)
+- **Long-term memory** — per-user semantic/episodic memory, separate from chat history
+- **Desktop GUI** — Tkinter-based, non-blocking, braille loading spinner
 
 ## Requirements
 
 - macOS / Linux / Windows
 - Python 3.10+
-- [Ollama](https://ollama.com) with an LLM pulled, e.g.:
+- For local Ollama: [Ollama](https://ollama.com) with a model pulled, e.g.:
 
 ```bash
 ollama pull llama3.2:3b
 ```
 
-## Setup
+## Quick Start
 
 ```bash
 python3 -m venv .venv
@@ -37,20 +34,42 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Fill in `.env` (defaults already point at local Ollama). Never commit real
-API keys; `.env` is gitignored.
+Fill in `.env` (defaults point at local Ollama). Never commit real API keys; `.env` is gitignored.
 
-## Usage
+**Desktop GUI:**
+```bash
+python gui.py
+```
 
-Terminal REPL:
+**Terminal REPL:**
 ```bash
 python main.py
 ```
 
-Desktop GUI:
-```bash
-python gui.py
+## Creating an Account
+
+On first launch, the GUI shows a login screen:
+
+1. Enter a username and password
+2. Click **Create Account** (or **Login** if you already have one)
+3. Your account is stored locally in `data/agentkafle.db` — passwords are PBKDF2-hashed with a unique salt, never stored in plaintext
+
+## Where Local Data Lives
+
 ```
+AgentKafle/
+├── data/
+│   ├── agentkafle.db          # SQLite: users, conversations, messages
+│   └── memories/
+│       └── user_<id>.json     # Per-user long-term memory
+├── cases/
+│   ├── CASE-001.json          # Case metadata
+│   └── CASE-001.evidence.json # Evidence for that case
+└── memory/
+    └── memories.json          # Global memory (legacy, no longer used by GUI)
+```
+
+All data is local to your machine. No cloud sync, no telemetry.
 
 ## Configuration
 
@@ -61,168 +80,146 @@ All model settings live in `.env`:
 | `LLM_BASE_URL`   | `http://localhost:11434/v1`| OpenAI-compatible API address  |
 | `LLM_MODEL`      | `llama3.2:3b`              | Model name                     |
 | `LLM_API_KEY`    | `ollama`                   | Key (any value for Ollama)     |
+| `GEMINI_API_KEY` | *(empty)*                  | Required for Gemini provider   |
+| `GEMINI_MODEL`   | `gemini-3.6-flash`         | Gemini model name              |
 | `PERSONA_FILE`   | *(empty)*                  | Optional custom system prompt  |
 
-Switch to a cloud provider by changing the first three values — no code
-changes.
+Switch providers in the GUI header pill (OLLAMA · llama3.2:3b → click to change). The active model is displayed and remembered per conversation.
 
-## Persona
-
-The detective system prompt lives in `persona.py` (the `Persona` class).
-It defines AgentKafle's role and the reasoning categories the investigator
-uses to separate what is known from what is claimed:
-
-- **FACT** — explicitly provided or verified information
-- **CLAIM** — something a person says happened, not yet verified
-- **INFERENCE** — logically suggested by evidence
-- **HYPOTHESIS** — a possible explanation, not established
-- **UNKNOWN** — information currently unavailable
-
-AgentKafle labels analyses with these categories and never presents a
-hypothesis as a confirmed fact.
-
-To use a different persona, set `PERSONA_FILE` in `.env` to a text file
-containing your own system prompt — no code changes needed.
-
-## Case management
-
-Cases are managed by `cases.py`:
-
-- `Case` — a dataclass with `id`, `title`, `description`, `status`,
-  `created_at`, and `updated_at`.
-- `CaseStatus` — `OPEN`, `SOLVED`, `CLOSED` (plain strings, easy to extend).
-- `CaseManager` — creates, loads, lists, updates, and deletes cases.
-
-Each case is stored as its own file under `cases/`:
+## Architecture Overview
 
 ```
-cases/
-    CASE-001.json
-    CASE-002.json
+gui.py                 →  Tkinter desktop GUI
+    ├─ auth.py         →  UserManager, Session (PBKDF2-HMAC-SHA256)
+    ├─ history.py      →  ChatStore (conversations, messages, ownership)
+    ├─ database.py     →  SQLite connection, schema, transactions
+    ├─ agent.py        →  AgentKafle (routing, cases, evidence, memory)
+    │    ├─ llm.py     →  ProviderRouter, LLMInterface, OllamaProvider, GeminiProvider
+    │    ├─ detective.py →  Detective (investigation, JSON reasoning)
+    │    ├─ cases.py   →  CaseManager (JSON persistence)
+    │    ├─ evidence.py →  EvidenceManager (JSON persistence)
+    │    ├─ memory.py  →  MemoryStore (per-user JSON)
+    │    └─ persona.py →  Detective system prompt
+    └─ tools.py        →  (reserved)
 ```
 
-This keeps cases independent and makes it easy to attach evidence files to a
-case in Step 4. The storage is plain JSON so it can be swapped for a database
-later without changing the rest of the app.
+**Key design decisions:**
 
-### Case commands
+- **ProviderRouter** owns the single active LLM — Agent and Detective share it, so they can never drift onto different backends
+- **Registry pattern** in `llm.py` — providers self-register; adding a new provider is a one-file change
+- **Ownership-enforced queries** in `history.py` — every conversation/message lookup includes `user_id`, so users can never access each other's data
+- **SQLite transactions** — message insert + conversation timestamp bump are atomic; crash-safe
+- **Per-user memory** — `data/memories/user_<id>.json` keeps long-term facts separate from chat history
 
-Case commands are handled directly in application code — the LLM never writes
-case data. In the REPL:
+## Supported Providers
 
-```
-new case Missing Laptop | A laptop disappeared from Room 204.
-list cases
-open case CASE-001
-current case
-solve case
-close case
-delete case CASE-001
-```
+| Provider | Type | Setup |
+|----------|------|-------|
+| Ollama | Local (OpenAI-compatible) | `ollama serve` + model pulled |
+| Gemini | Cloud (Google GenAI) | `GEMINI_API_KEY` in `.env` |
 
-### Active case
+## Detective Features
 
-AgentKafle tracks one *active case* at a time. The active case is attached as
-text to the system prompt when reasoning, so the model always knows which
-investigation it is working on. The model only receives a copy; CaseManager
-remains the source of truth.
+- **Cases**: create, list, open, solve, close, delete
+- **Evidence**: add, list, view, verify, dispute, delete (per case)
+- **Evidence status**: VERIFIED (fact), UNVERIFIED (claim), DISPUTED (contested) — model is instructed to respect these
+- **Structured reasoning**: Detective calls `chat_json()` for deterministic analysis output
 
-## Evidence management
+## Long-term Memory
 
-Evidence is managed by `evidence.py` and attached to the **active case**:
+- **Separate from chat history** — facts explicitly stored via `remember` command or extraction
+- **Per-user files** — `data/memories/user_<id>.json` (not shared between accounts)
+- **Types**: EPISODIC, SEMANTIC, CASE, CONVERSATION
+- **Importance**: LOW, MEDIUM, HIGH (affects recall ranking)
+- **KeywordRetriever** — dependency-free token overlap + importance + recency (pluggable for embeddings later)
 
-- `EvidenceType` — `PHYSICAL`, `DIGITAL`, `TESTIMONY`, `DOCUMENT`, `OTHER`.
-- `EvidenceStatus` — `UNVERIFIED`, `VERIFIED`, `DISPUTED`.
-- `Evidence` — a dataclass with `id`, `case_id`, `title`, `description`,
-  `evidence_type`, `status`, `source`, `created_at`, and `updated_at`.
-- `EvidenceManager` — adds, loads, updates, and deletes evidence.
-
-Evidence IDs (`EVD-001`, `EVD-002`, …) are unique across all cases.
-
-Each case's evidence is stored in its own file:
-
-```
-cases/
-    CASE-001.json
-    CASE-001.evidence.json
-    CASE-002.json
-    CASE-002.evidence.json
-```
-
-Splitting evidence per case keeps cases independent: deleting one case never
-touches another's evidence, and the plain JSON can later be swapped for a
-database.
-
-### Evidence commands
-
-Evidence commands operate on the active case and are handled in application
-code — the LLM never writes evidence data:
-
-```
-add evidence Broken window | Glass fragments found inside Room 204
-add evidence Camera footage | Someone entering Room 204 at 8:17 PM | type=DIGITAL | source=Security camera
-list evidence
-view evidence EVD-001
-verify evidence EVD-001
-dispute evidence EVD-001
-delete evidence EVD-001
-```
-
-`type=` and `source=` are optional. Without them, evidence is created as
-`OTHER` / `UNVERIFIED`.
-
-### How evidence status affects reasoning
-
-When AgentKafle reasons, the active case's evidence is grouped by status and
-sent to the model with an explicit rule:
-
-- **VERIFIED** — may be treated as established.
-- **UNVERIFIED** — only a claim; must not be treated as fact.
-- **DISPUTED** — contested; must not be relied upon.
-
-The model is told never to present UNVERIFIED or DISPUTED evidence as
-confirmed. The status is stored by `EvidenceManager`; the LLM only reads it.
-
-## GUI (Step 5)
-
-The desktop application (`gui.py`) provides a clean, modern chat-style
-interface with:
-
-- **Polished header** — AgentKafle wordmark with the "Detective AI" subtitle,
-  plus a compact provider/model badge (OLLAMA · llama3.2:3b) that is
-  reserved for a future provider selector.
-- **Active case card** — a compact case bar that always shows the current
-  case's ID, title, and a colour-coded status badge (OPEN / SOLVED /
-  CLOSED), or "No active case" when none is open.
-- **Message bubbles** — user messages align right in a blue bubble, AgentKafle
-  replies align left; both auto-scroll as the conversation grows.
-- **Command passthrough** — all case and evidence commands (`new case`,
-  `list evidence`, `verify evidence`, etc.) are routed through the same
-  `AgentKafle.handle_command()` used by the terminal, so behavior is
-  identical.
-- **Real loading animation** — while the model thinks, the input area shows
-  "⠹ AgentKafle is thinking..." with a live braille spinner (⠋ ⠙ ⠹ …).
-- **Non-freezing UI** — the LLM call runs on a background thread; the GUI
-  remains responsive, input and Send are disabled during generation, and the
-  spinner updates every 80 ms.
-
-Launch the GUI:
+## Development / Testing
 
 ```bash
-python gui.py
+# Run all tests
+.venv/bin/python test_provider_switch.py
+.venv/bin/python test_chat_history.py
+
+# Syntax check
+.venv/bin/python -m py_compile *.py
 ```
 
-The terminal REPL (`python main.py`) continues to work unchanged.
+**Test coverage:**
 
-## Architecture
+- `test_provider_switch.py` — provider registry, exceptions, switching, detective routing, model selection, lifecycle
+- `test_chat_history.py` — auth, conversations, isolation, persistence, agent integration, provider-switch preservation
 
-- `main.py` — command-line entry point
-- `agent.py` — the AgentKafle class: case/evidence operations, command
-  routing, and LLM reasoning
-- `llm.py` — LLMInterface: the only module that talks to the model
-- `persona.py` — the detective system prompt and Persona loader
-- `cases.py` — Case, CaseStatus, and CaseManager (JSON persistence)
-- `evidence.py` — Evidence, EvidenceType, EvidenceStatus, and
-  EvidenceManager (JSON persistence)
-- `memory.py`, `detective.py`, `tools.py`, `gui.py` — placeholder modules for
-  later steps
+## Current Limitations (v1.0)
+
+- **No model dropdown** — `available_models()` is wired but not yet exposed in the GUI (planned for v1.1)
+- **No password reset** — local app; delete `data/agentkafle.db` and recreate account
+- **No multi-process safety** — SQLite uses `RLock`; concurrent processes would need WAL mode
+- **Background thread needs mainloop** — headless tests can't fully exercise the LLM worker thread (GUI works fine)
+- **No conversation export/import** — planned for v1.1
+- **No per-message timestamps in UI** — messages show order, not wall-clock time
+
+## Roadmap (v1.1+)
+
+- Model selector dropdown in provider pill
+- Conversation export (JSON/Markdown)
+- Password reset via email or local hint
+- Embedding-based memory retrieval (swap KeywordRetriever)
+- Multi-process SQLite (WAL mode)
+- Android client feasibility (see below)
+
+## Android Feasibility Assessment
+
+**Goal:** Evaluate whether AgentKafle's architecture can support a future Android client.
+
+| Component | Reusability | Notes |
+|-----------|-------------|-------|
+| `llm.py` (ProviderRouter, providers) | ✅ **High** | Pure Python; Ollama client needs network access to host machine; Gemini works directly on Android via GenAI SDK |
+| `agent.py` / `detective.py` | ✅ **High** | Pure Python logic; no GUI dependencies |
+| `cases.py` / `evidence.py` / `memory.py` | ✅ **High** | JSON persistence; would need file-path adaptation for Android sandbox |
+| `auth.py` / `database.py` / `history.py` | ⚠️ **Medium** | SQLite works on Android; password hashing reusable; schema portable. Would need to expose as a local service (Kivy/Chaos) or backend API |
+| `gui.py` | ❌ **None** | Tkinter is desktop-only |
+
+**Three architectural paths for Android:**
+
+1. **Native Android client (Kotlin/Jetpack Compose)** + **AgentKafle backend API**
+   - Python backend runs on user's computer/server (FastAPI/Flask)
+   - Android app talks REST/WebSocket to backend
+   - Ollama runs on backend host; Gemini key stored on backend
+   - Sync: SQLite → API → Room/SQLDelight on device
+   - Best UX, most work
+
+2. **Python/Kivy (or BeeWare/Toga) app**
+   - Bundle Python + dependencies as APK
+   - Reuse `llm.py`, `agent.py`, `detective.py`, `auth.py`, `database.py`, `history.py` almost directly
+   - Ollama: must run on same device (heavy) or connect to remote host
+   - Gemini: works directly via GenAI SDK
+   - Single codebase, but Python-on-Android has size/performance tradeoffs
+
+3. **Hybrid: local-first sync**
+   - Android app has its own SQLite (Room) + memory JSON
+   - Periodic sync with desktop AgentKafle via local network (WebDAV, Syncthing, custom protocol)
+   - Conflicts resolved by timestamps/UUIDs
+   - True offline-first, but sync logic is complex
+
+**Recommendation for v1.x:** Keep the desktop architecture clean (ProviderRouter, registry, ownership-enforced DB, per-user memory files) so path 1 or 2 is straightforward later. No Android-specific code in v1.0.
+
+**Ollama on Android:** Not practical on-device (RAM/CPU). Android client would either:
+- Connect to a remote Ollama instance (user's desktop/server) via LAN/VPN/Tailscale, or
+- Use Gemini/cloud providers exclusively on mobile
+
+**Gemini on Android:** Works natively via `google-genai` SDK — just needs the API key.
+
+## Version
+
+**v1.0.0** — First stable release with persistent auth, chat history, provider switching, Detective AI, and desktop GUI.
+
+Version constant available at runtime:
+
+```python
+from agentkafle import __version__
+print(__version__)  # "1.0.0"
+```
+
+---
+
+*AgentKafle — local, private, detective AI. No cloud required.*
