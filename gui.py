@@ -31,14 +31,23 @@ BUBBLE_ABSOLUTE_MAX = 640
 
 # ── Provider registry ─────────────────────────────────────────────────────
 # Single place that describes the providers the header can select.
-# "configured": False means the backend does not exist yet (Gemini), so the
-# GUI only shows a "coming soon" note instead of making fake requests.
-# A real Gemini backend plugs in here later without redesigning any GUI code.
+# "configured" is determined at runtime based on API key availability.
+# A real Gemini backend plugs in here without redesigning any GUI code.
 # ───────────────────────────────────────────────────────────────────────────
+
+def _check_provider_configured(provider: str) -> bool:
+    """Check if a provider has its required configuration."""
+    if provider == "ollama":
+        return True  # Ollama runs locally, no API key needed
+    elif provider == "gemini":
+        import os
+        return bool(os.getenv("GEMINI_API_KEY", "").strip())
+    return False
+
 
 PROVIDERS = {
     "ollama": {"label": "OLLAMA", "value": "llama3.2:3b", "configured": True},
-    "gemini": {"label": "GEMINI", "value": "Not configured", "configured": False},
+    "gemini": {"label": "GEMINI", "value": "gemini-3.6-flash", "configured": _check_provider_configured("gemini")},
 }
 
 
@@ -370,10 +379,7 @@ class AgentKafleGUI(tk.Tk):
     def _select_provider(self, key):
         """Handle picking a provider from the menu.
 
-        The header pill always updates to the chosen provider. For
-        providers that are not configured yet (Gemini), we only show an
-        honest "coming soon" note: no API key, no fake request, and Ollama
-        keeps handling all requests.
+        Switches the active LLM provider for the AgentKafle instance.
         """
         if key not in PROVIDERS:
             return
@@ -381,21 +387,34 @@ class AgentKafleGUI(tk.Tk):
         if key == self._active_provider:
             return
 
+        info = PROVIDERS[key]
+        if not info["configured"]:
+            # Provider not configured - show error but don't switch
+            self._append_error(
+                f"{info['label']} is not configured. "
+                "Set GEMINI_API_KEY environment variable and restart."
+            )
+            return
+
+        # Create new agent with the selected provider
+        try:
+            new_agent = AgentKafle(provider=key)
+            # Preserve the existing history and case state
+            new_agent.case_manager = self.agent.case_manager
+            new_agent.evidence_manager = self.agent.evidence_manager
+            new_agent.memory = self.agent.memory
+            new_agent.detective = self.agent.detective
+            self.agent = new_agent
+        except Exception as e:
+            self._append_error(f"Failed to switch to {info['label']}: {e}")
+            return
+
         self._active_provider = key
         self._refresh_provider_pill()
 
-        info = PROVIDERS[key]
-        if info["configured"]:
-            self._append_agent(
-                f"Provider set to {info['label']} ({info['value']})."
-            )
-        else:
-            # The Gemini backend does not exist yet, so we never pretend it
-            # works: requests continue through Ollama.
-            self._append_agent(
-                f"{info['label']} integration is coming soon and is not "
-                "configured yet. Ollama is still handling requests."
-            )
+        self._append_agent(
+            f"Provider set to {info['label']} ({info['value']})."
+        )
 
     def _open_provider_menu(self, _event=None):
         """Show the provider chooser menu under the header pill."""

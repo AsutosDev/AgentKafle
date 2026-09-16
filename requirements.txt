@@ -1,5 +1,8 @@
 # LLM client (works with Ollama locally and any OpenAI-compatible provider)
 openai>=3.0
 
+# Google GenAI SDK for Gemini
+google-genai>=1.0
+
 # Loads configuration from .env
 python-dotenv>=1.0

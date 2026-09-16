@@ -29,7 +29,7 @@ The detective persona (system prompt) lives in persona.py, not here.
 import re
 from enum import Enum
 
-from llm import LLMInterface
+from llm import create_llm
 from persona import Persona
 from cases import CaseManager, CaseStatus
 from evidence import EvidenceManager, EvidenceType, EvidenceStatus
@@ -88,9 +88,10 @@ MEMORY_KEYWORDS = (
 
 
 class AgentKafle:
-    def __init__(self, name="AgentKafle"):
+    def __init__(self, name="AgentKafle", provider="ollama"):
         self.name = name
-        self.llm = LLMInterface()
+        self.provider_name = provider.lower().strip()
+        self.llm = create_llm(self.provider_name)
         self.persona = Persona(agent_name=name)
         self.case_manager = CaseManager()
         self.evidence_manager = EvidenceManager()
